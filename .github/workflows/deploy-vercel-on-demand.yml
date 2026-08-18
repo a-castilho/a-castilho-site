@@ -10,6 +10,7 @@ on:
         options:
           - a-castilho-site
           - maquinadeleads
+          - maquinadeleads-preview
           - telaviva
           - regulaai
   push:
@@ -51,6 +52,8 @@ jobs:
             a-castilho-site)
               REPO="https://github.com/a-castilho/a-castilho-site.git"; ROOT="." ;;
             maquinadeleads)
+              REPO="https://github.com/a-castilho/maquinadeleads.git"; ROOT="maquina-de-leads/frontend" ;;
+            maquinadeleads-preview)
               REPO="https://github.com/a-castilho/maquinadeleads.git"; ROOT="maquina-de-leads/frontend" ;;
             telaviva)
               REPO="https://github.com/acastilho/telaviva.git"; ROOT="preview" ;;
