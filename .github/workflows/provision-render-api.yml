@@ -18,6 +18,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -29,10 +30,12 @@ jobs:
           set -euo pipefail
           cat > /tmp/render.mjs <<'NODE'
           const token=process.env.RENDER_API_KEY;
+          const neonToken=process.env.NEON_API_KEY;
           const ghToken=process.env.GH_TOKEN;
           const ghRepo=process.env.GITHUB_REPOSITORY;
           const sha=process.env.GITHUB_SHA;
           if(!token) throw new Error('RENDER_API_KEY missing');
+          if(!neonToken) throw new Error('NEON_API_KEY missing');
           const base='https://api.render.com/v1';
           async function status(state,context,description,target_url){
             const body={state,context:context.slice(0,100),description:description.slice(0,140)};
@@ -47,7 +50,29 @@ jobs:
             return data;
           }
           function slug(s){return String(s||'unknown').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,48)||'unknown'}
+          async function neonConnection(){
+            const q=new URLSearchParams({database_name:'neondb',role_name:'neondb_owner',pooled:'true'});
+            const r=await fetch(`https://console.neon.tech/api/v2/projects/falling-unit-68011930/connection_uri?${q}`,{headers:{Authorization:`Bearer ${neonToken}`,Accept:'application/json'}});
+            const data=await r.json().catch(()=>({}));
+            if(!r.ok||!data.uri) throw new Error(`neon-connection-${r.status}`);
+            return data.uri;
+          }
+          async function putEnv(serviceId,key,value){
+            await request(`/services/${serviceId}/env-vars/${encodeURIComponent(key)}`,{method:'PUT',body:JSON.stringify({value})});
+          }
+          async function waitLive(url){
+            let code=0;
+            for(let i=0;i<24;i++){
+              try{const r=await fetch(url,{redirect:'follow'});code=r.status;if(r.ok)return true}catch{}
+              await new Promise(resolve=>setTimeout(resolve,10000));
+            }
+            throw new Error(`live-http-${code||'unreachable'}`);
+          }
+
           await status('pending','render/provision','Provisioning Render services');
+          const acsDatabaseUrl=await neonConnection();
+          await status('success','acs/neon','Existing ACS Neon database resolved and preserved');
+
           const owners=await request('/owners?limit=100');
           const first=Array.isArray(owners)?owners[0]:owners?.data?.[0];
           const ownerId=first?.owner?.id||first?.id;
@@ -56,6 +81,7 @@ jobs:
           const rows=Array.isArray(listed)?listed:(listed?.data||listed?.services||[]);
           const existing=new Map(rows.map(x=>{const s=x.service||x;return[s.name,s]}));
           const specs=[
+            {name:'acs',type:'web_service',repo:'https://github.com/a-castilho/a-castilho-site',rootDir:'.',envVars:[{key:'DATABASE_URL',value:acsDatabaseUrl},{key:'NEXT_PUBLIC_SITE_URL',value:'https://acastilho.com.br'}],serviceDetails:{runtime:'node',plan:'free',healthCheckPath:'/',envSpecificDetails:{buildCommand:'npm install && npm run build',startCommand:'npm start'}}},
             {name:'maquinadeleads-homolog-api',type:'web_service',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/backend',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'npm start'}}},
             {name:'maquinadeleads-homolog-web',type:'static_site',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/frontend',serviceDetails:{buildCommand:'npm ci && npm run build',publishPath:'dist'}},
             {name:'telaviva-homolog',type:'static_site',repo:'https://github.com/acastilho/telaviva',rootDir:'preview',serviceDetails:{buildCommand:'echo TelaViva static homologation preview',publishPath:'.'}},
@@ -65,23 +91,43 @@ jobs:
           for(const spec of specs){
             try{
               let s=existing.get(spec.name);
+              let createdNow=false;
               if(!s){
                 await status('pending',`render/${spec.name}`,`Creating ${spec.name}`);
-                const created=await request('/services',{method:'POST',body:JSON.stringify({...spec,ownerId,branch:'main',autoDeploy:'yes'})});
+                const created=await request('/services',{method:'POST',body:JSON.stringify({...spec,ownerId,branch:'main',autoDeploy:spec.name==='acs'?'no':'yes'})});
                 s=created?.service||created;
+                createdNow=true;
+              }
+              if(spec.name==='acs'&&s?.id){
+                if(!createdNow){
+                  await putEnv(s.id,'DATABASE_URL',acsDatabaseUrl);
+                  await putEnv(s.id,'NEXT_PUBLIC_SITE_URL','https://acastilho.com.br');
+                }
+                await status('pending','acs/render',createdNow?'Building ACS on Render':'Redeploying ACS on Render');
+                if(!createdNow) await request(`/services/${s.id}/deploys`,{method:'POST',body:JSON.stringify({clearCache:'do_not_clear'})});
               }
               if(s?.id){
                 const detail=await request(`/services/${s.id}`);
                 s=detail?.service||detail||s;
               }
-              const target=s?.url||(s?.id?`https://dashboard.render.com/web/${s.id}`:undefined);
-              await status('success',`render/${spec.name}`,`${spec.name} created`,target);
+              const target=s?.url||s?.serviceDetails?.url||(s?.id?`https://dashboard.render.com/web/${s.id}`:undefined);
+              if(spec.name==='acs'){
+                if(!target?.includes('.onrender.com')) throw new Error('acs-public-url-missing');
+                await waitLive(target);
+                const api=await fetch(`${target.replace(/\/$/,'')}/api/contact`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({website:'validation-bot'})});
+                const body=await api.json().catch(()=>({}));
+                if(!api.ok||body?.ok!==true) throw new Error(`acs-api-smoke-${api.status}`);
+                await status('success','acs/render','ACS live on Render',target);
+                await status('success','acs/smoke','ACS homepage and API smoke test passed',target);
+              }
+              await status('success',`render/${spec.name}`,`${spec.name} ready`,target);
               if(target?.includes('.onrender.com')) await status('success',`render-url/${spec.name}`,`${spec.name} public URL`,target);
             }catch(e){
               failures++;
               const code=e.code||'error';
               const reason=slug(e.message);
               await status('failure',`render/${spec.name}/http-${code}/${reason}`,`${spec.name} failed (${code})`);
+              if(spec.name==='acs') await status('failure','acs/render',`ACS Render failed: ${reason}`);
             }
           }
           if(failures===0){await status('success','render/provision','All Render services provisioned');}
