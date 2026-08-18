@@ -1,4 +1,4 @@
-name: Provision and deploy to Vercel
+name: Provision database and deploy to Vercel
 
 on:
   workflow_dispatch:
@@ -10,17 +10,20 @@ permissions:
   statuses: write
 
 concurrency:
-  group: vercel-production-${{ github.repository }}
+  group: production-${{ github.repository }}
   cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       GH_TOKEN: ${{ github.token }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_ORG_ID: ${{ vars.NEON_ORG_ID }}
+      NEON_PROJECT_NAME: ${{ github.event.repository.name }}
       VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
       VERCEL_ORG_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
       VERCEL_PROJECT_NAME: ${{ github.event.repository.name }}
@@ -51,25 +54,116 @@ jobs:
             -d "$payload" >/dev/null
           EOF
           chmod +x /tmp/post-status
-          /tmp/post-status pending automation/pipeline "Automatic provisioning and deploy started"
+          /tmp/post-status pending automation/pipeline "Automatic database provisioning and deploy started"
 
-      - name: Validate deployment secrets
+      - name: Validate deployment credentials
         shell: bash
         run: |
           set -euo pipefail
           test -n "$VERCEL_TOKEN" || { /tmp/post-status failure failure/missing-vercel-token "VERCEL_TOKEN missing"; exit 1; }
-          test -n "$DATABASE_URL" || { /tmp/post-status failure failure/missing-database-url "DATABASE_URL missing"; exit 1; }
-          /tmp/post-status success automation/secrets "Deployment secrets available"
+
+          if [ -n "$NEON_API_KEY" ]; then
+            test -n "$NEON_ORG_ID" || { /tmp/post-status failure failure/missing-neon-org-id "NEON_ORG_ID missing"; exit 1; }
+            /tmp/post-status success automation/neon-credentials "Neon automation credentials available"
+          elif [ -n "$DATABASE_URL" ]; then
+            /tmp/post-status success automation/database-fallback "Using repository DATABASE_URL fallback"
+          else
+            /tmp/post-status failure failure/missing-database-credentials "NEON_API_KEY and DATABASE_URL are both missing"
+            exit 1
+          fi
+
+          /tmp/post-status success automation/secrets "Deployment credentials available"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      - name: Provision or reuse Neon database
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "$NEON_API_KEY" ]; then
+            echo "NEON_API_KEY not configured; keeping DATABASE_URL fallback."
+            exit 0
+          fi
+
+          npm install -g neon@latest >/dev/null
+
+          neon projects list \
+            --org-id "$NEON_ORG_ID" \
+            --output json > /tmp/neon-projects.json
+
+          NEON_PROJECT_ID=$(node - "$NEON_PROJECT_NAME" <<'EOF'
+          const fs = require('fs');
+          const name = process.argv[2];
+          const x = JSON.parse(fs.readFileSync('/tmp/neon-projects.json', 'utf8'));
+          const rows = Array.isArray(x) ? x : (x.projects || x.data || []);
+          const project = rows.find((item) => item && item.name === name);
+          if (project?.id) process.stdout.write(project.id);
+          EOF
+          )
+
+          if [ -z "$NEON_PROJECT_ID" ]; then
+            neon projects create \
+              --name "$NEON_PROJECT_NAME" \
+              --org-id "$NEON_ORG_ID" \
+              --database neondb \
+              --role neondb_owner \
+              --output json > /tmp/neon-created.json
+
+            NEON_PROJECT_ID=$(node <<'EOF'
+          const fs = require('fs');
+          const x = JSON.parse(fs.readFileSync('/tmp/neon-created.json', 'utf8'));
+          const project = x.project || x;
+          if (!project?.id) process.exit(2);
+          process.stdout.write(project.id);
+          EOF
+            )
+            /tmp/post-status success automation/neon-created "Neon project created automatically"
+          else
+            /tmp/post-status success automation/neon-reused "Existing Neon project reused"
+          fi
+
+          DATABASE_URL=$(neon connection-string \
+            --project-id "$NEON_PROJECT_ID" \
+            --database-name neondb \
+            --role-name neondb_owner \
+            --pooled)
+
+          test -n "$DATABASE_URL"
+          echo "::add-mask::$DATABASE_URL"
+          {
+            echo 'DATABASE_URL<<__NEON_DATABASE_URL__'
+            echo "$DATABASE_URL"
+            echo '__NEON_DATABASE_URL__'
+            echo "NEON_PROJECT_ID=$NEON_PROJECT_ID"
+          } >> "$GITHUB_ENV"
+
+          if [ -f db/schema.sql ]; then
+            neon connection-string \
+              --project-id "$NEON_PROJECT_ID" \
+              --database-name neondb \
+              --role-name neondb_owner \
+              --psql -- -v ON_ERROR_STOP=1 -f db/schema.sql >/dev/null
+            /tmp/post-status success automation/neon-schema "Database schema applied"
+          fi
+
+          neon connection-string \
+            --project-id "$NEON_PROJECT_ID" \
+            --database-name neondb \
+            --role-name neondb_owner \
+            --psql -- -v ON_ERROR_STOP=1 -c 'select 1 as ok' >/dev/null
+
+          /tmp/post-status success "automation/neon-$NEON_PROJECT_ID" "Neon database ready"
+
       - name: Provision Vercel project and environment
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$DATABASE_URL" || { /tmp/post-status failure failure/database-url-empty "DATABASE_URL unavailable after Neon provisioning"; exit 1; }
+
           PROJECT_RESPONSE=$(mktemp)
           HTTP_CODE=$(curl -sS -o "$PROJECT_RESPONSE" -w "%{http_code}" \
             -H "Authorization: Bearer $VERCEL_TOKEN" \
