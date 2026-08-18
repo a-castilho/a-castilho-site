@@ -1,4 +1,5 @@
 import './globals.css';
+import './diagnostic.css';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://acastilho.com.br';
 
