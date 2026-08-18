@@ -1,0 +1,72 @@
+{
+  "projects": [
+    {
+      "name": "a-castilho-site",
+      "repo": "a-castilho/a-castilho-site",
+      "neon": true,
+      "vercel": { "enabled": true, "rootDirectory": null },
+      "render": []
+    },
+    {
+      "name": "regulaai",
+      "repo": "acastilho/regulaai",
+      "neon": true,
+      "vercel": { "enabled": true, "rootDirectory": null },
+      "render": []
+    },
+    {
+      "name": "maquinadeleads",
+      "repo": "a-castilho/maquinadeleads",
+      "neon": true,
+      "vercel": { "enabled": true, "rootDirectory": "maquina-de-leads/frontend" },
+      "render": [
+        {
+          "name": "maquinadeleads-homolog-api",
+          "type": "web_service",
+          "runtime": "docker",
+          "rootDirectory": "maquina-de-leads/backend",
+          "healthCheckPath": "/health"
+        },
+        {
+          "name": "maquinadeleads-homolog-web",
+          "type": "static_site",
+          "runtime": "static",
+          "rootDirectory": "maquina-de-leads/frontend",
+          "buildCommand": "npm ci && npm run build",
+          "publishDirectory": "dist"
+        }
+      ]
+    },
+    {
+      "name": "devpilot",
+      "repo": "a-castilho/devpilot",
+      "neon": true,
+      "vercel": { "enabled": false, "rootDirectory": null },
+      "render": [
+        {
+          "name": "devpilot-homolog",
+          "type": "web_service",
+          "runtime": "docker",
+          "rootDirectory": ".",
+          "healthCheckPath": "/health"
+        }
+      ]
+    },
+    {
+      "name": "telaviva",
+      "repo": "acastilho/telaviva",
+      "neon": true,
+      "vercel": { "enabled": true, "rootDirectory": "preview" },
+      "render": [
+        {
+          "name": "telaviva-homolog",
+          "type": "static_site",
+          "runtime": "static",
+          "rootDirectory": "preview",
+          "buildCommand": "echo TelaViva static homologation preview",
+          "publishDirectory": "."
+        }
+      ]
+    }
+  ]
+}
