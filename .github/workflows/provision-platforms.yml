@@ -25,7 +25,6 @@ jobs:
       NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       NEON_ORG_ID: ${{ vars.NEON_ORG_ID }}
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -106,10 +105,39 @@ jobs:
           done < /tmp/vercel-projects.ndjson
 
       - name: Provision Render services
-        if: ${{ env.RENDER_API_KEY != '' && env.RENDER_OWNER_ID != '' }}
+        if: ${{ env.RENDER_API_KEY != '' }}
         shell: bash
         run: |
           set -euo pipefail
+
+          curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
+            'https://api.render.com/v1/services?name=regulaai&limit=20' > /tmp/render-regulaai.json
+
+          RENDER_OWNER_ID=$(node <<'NODE'
+          const fs=require('fs');
+          const x=JSON.parse(fs.readFileSync('/tmp/render-regulaai.json','utf8'));
+          const rows=Array.isArray(x)?x:(x.services||x.data||[]);
+          const row=rows[0];
+          process.stdout.write(row?.ownerId || row?.owner_id || row?.service?.ownerId || row?.service?.owner_id || '');
+          NODE
+          )
+
+          if [ -z "$RENDER_OWNER_ID" ]; then
+            curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
+              'https://api.render.com/v1/owners?limit=100' > /tmp/render-owners.json
+            RENDER_OWNER_ID=$(node <<'NODE'
+          const fs=require('fs');
+          const x=JSON.parse(fs.readFileSync('/tmp/render-owners.json','utf8'));
+          const rows=Array.isArray(x)?x:(x.owners||x.data||[]);
+          const row=rows[0];
+          process.stdout.write(row?.id || row?.owner?.id || '');
+          NODE
+            )
+          fi
+
+          test -n "$RENDER_OWNER_ID" || { echo 'Could not resolve Render workspace'; exit 1; }
+          echo "Render workspace resolved automatically"
+
           curl -fsSL https://raw.githubusercontent.com/render-oss/cli/main/bin/install.sh | sh >/dev/null
           export PATH="$HOME/.render/bin:$PATH"
           export RENDER_OUTPUT=json
@@ -146,14 +174,14 @@ jobs:
           create_service telaviva-homolog static_site acastilho/telaviva static preview 'echo TelaViva static homologation preview' .
 
       - name: Render credential status
-        if: ${{ env.RENDER_API_KEY == '' || env.RENDER_OWNER_ID == '' }}
+        if: ${{ env.RENDER_API_KEY == '' }}
         run: |
           echo '### Render pending one-time authorization' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Add RENDER_API_KEY as a repository secret and RENDER_OWNER_ID as a repository variable. The next run provisions all missing Render services automatically.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Add RENDER_API_KEY as a repository secret. The workflow discovers the correct workspace automatically and provisions all missing Render services.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summary
         run: |
           echo '### Platform provisioner completed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Neon: idempotent project provisioning enabled' >> "$GITHUB_STEP_SUMMARY"
           echo '- Vercel: idempotent project provisioning enabled' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Render: idempotent service provisioning enabled when credentials are available' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Render: idempotent service provisioning enabled when RENDER_API_KEY is available' >> "$GITHUB_STEP_SUMMARY"
