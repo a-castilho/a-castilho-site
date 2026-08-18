@@ -1,0 +1,65 @@
+name: Verify Render live services
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-render-live.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Resolve and test Render URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/verify.mjs <<'NODE'
+          const ghToken=process.env.GH_TOKEN, token=process.env.RENDER_API_KEY;
+          const repo=process.env.GITHUB_REPOSITORY, sha=process.env.GITHUB_SHA;
+          const ids={
+            'maquinadeleads-homolog-api':'srv-da2c2prm8hqs73ein4e0',
+            'maquinadeleads-homolog-web':'srv-da2c2qjm8hqs73ein620',
+            'telaviva-homolog':'srv-da2c2rfqj5pc73fb4na0'
+          };
+          async function status(state,context,description,target_url){
+            const body={state,context,description:description.slice(0,140)}; if(target_url) body.target_url=target_url;
+            const r=await fetch(`https://api.github.com/repos/${repo}/statuses/${sha}`,{method:'POST',headers:{Authorization:`Bearer ${ghToken}`,'Accept':'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(!r.ok) throw new Error(`github-status-${r.status}`);
+          }
+          async function getService(id){
+            const r=await fetch(`https://api.render.com/v1/services/${id}`,{headers:{Authorization:`Bearer ${token}`}});
+            if(!r.ok) throw new Error(`render-service-${id}-${r.status}`);
+            return await r.json();
+          }
+          let failures=0;
+          for(const [name,id] of Object.entries(ids)){
+            try{
+              const raw=await getService(id); const s=raw.service||raw;
+              const url=s.url || s.serviceDetails?.url || `https://${name}.onrender.com`;
+              const checkUrl=name.endsWith('-api')?`${url.replace(/\/$/,'')}/health`:url;
+              let ok=false, code=0;
+              for(let i=0;i<12;i++){
+                try{const r=await fetch(checkUrl,{redirect:'follow'}); code=r.status; if(r.ok){ok=true;break;}}catch{}
+                await new Promise(r=>setTimeout(r,10000));
+              }
+              await status(ok?'success':'failure',`live/${name}`,ok?`${name} live`:`${name} HTTP ${code||'unreachable'}`,url);
+              console.log(`${name} ${url} ${ok?'LIVE':`HTTP ${code}`}`);
+              if(!ok) failures++;
+            }catch(e){failures++; await status('failure',`live/${name}`,String(e.message));}
+          }
+          if(failures) process.exit(1);
+          NODE
+          node /tmp/verify.mjs
