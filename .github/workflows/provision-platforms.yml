@@ -91,6 +91,7 @@ jobs:
 
       - name: Ensure Vercel projects
         if: ${{ env.VERCEL_TOKEN != '' }}
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -120,7 +121,7 @@ jobs:
               "https://api.vercel.com/v11/projects?teamId=$VERCEL_TEAM_ID")
             if [ "$code" != "200" ] && [ "$code" != "201" ]; then
               cat /tmp/vercel-project.json
-              /tmp/post-status failure automation/vercel "Vercel project provisioning failed"
+              /tmp/post-status failure automation/vercel "Vercel project provisioning isolated; Render continues"
               exit 1
             fi
             echo "Vercel: created $name"
@@ -128,7 +129,7 @@ jobs:
           /tmp/post-status success automation/vercel "Vercel projects ready"
 
       - name: Ensure Render services via REST API
-        if: ${{ env.RENDER_API_KEY != '' }}
+        if: ${{ always() && env.RENDER_API_KEY != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -180,7 +181,7 @@ jobs:
           node /tmp/provision-render.mjs
 
       - name: Missing Render credential
-        if: ${{ env.RENDER_API_KEY == '' }}
+        if: ${{ always() && env.RENDER_API_KEY == '' }}
         run: |
           /tmp/post-status failure automation/render "RENDER_API_KEY missing"
           exit 1
