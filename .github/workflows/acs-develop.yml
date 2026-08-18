@@ -1,0 +1,339 @@
+name: ACS develop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'db/**'
+      - 'package.json'
+      - '.github/workflows/acs-develop.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: acs-develop-main
+  cancel-in-progress: false
+
+jobs:
+  develop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
+      NEON_PROJECT_ID: falling-unit-68011930
+      VERCEL_PROJECT_NAME: acs
+      RENDER_SERVICE_NAME: acs
+      SITE_URL: https://acastilho.com.br
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare status reporter
+        shell: bash
+        run: |
+          cat > /tmp/status.mjs <<'NODE'
+          const [state, context, description, target] = process.argv.slice(2);
+          const body = { state, context, description: String(description || '').slice(0, 140) };
+          if (target) body.target_url = target;
+          const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/statuses/${process.env.GITHUB_SHA}`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${process.env.GH_TOKEN}`,
+              Accept: 'application/vnd.github+json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          });
+          if (!response.ok) throw new Error(`GitHub status failed: ${response.status}`);
+          NODE
+          node /tmp/status.mjs pending acs/develop 'ACS validation and deployment started'
+
+      - name: Validate credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in VERCEL_TOKEN RENDER_API_KEY NEON_API_KEY; do
+            if [ -z "${!key:-}" ]; then
+              echo "Missing $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            node /tmp/status.mjs failure acs/credentials 'Required deployment credential is missing'
+            exit 1
+          fi
+          node /tmp/status.mjs success acs/credentials 'Deployment credentials available'
+
+      - name: Install dependencies and build
+        shell: bash
+        env:
+          NEXT_PUBLIC_SITE_URL: https://acastilho.com.br
+        run: |
+          set -euo pipefail
+          npm install
+          npm run build
+          node /tmp/status.mjs success acs/build 'Next.js production build passed'
+
+      - name: Resolve Neon database
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g neon@latest >/dev/null
+          db_url="$(neon connection-string --project-id "$NEON_PROJECT_ID" --database-name neondb --role-name neondb_owner --pooled)"
+          test -n "$db_url"
+          echo "::add-mask::$db_url"
+          printf 'ACS_DATABASE_URL=%s\n' "$db_url" >> "$GITHUB_ENV"
+
+      - name: Verify Neon schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { neon } = require('@neondatabase/serverless');
+          const sql = neon(process.env.ACS_DATABASE_URL);
+          const rows = await sql`select to_regclass('public.contact_leads')::text as table_name, (select count(*)::int from public.contact_leads) as total_leads`;
+          if (!rows[0]?.table_name) throw new Error('contact_leads table not found');
+          console.log(`Neon OK: contact_leads rows=${rows[0].total_leads}`);
+          NODE
+          node /tmp/status.mjs success acs/neon 'Existing Neon database verified and preserved'
+
+      - name: Provision and deploy Vercel
+        id: vercel
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/vercel.mjs <<'NODE'
+          import fs from 'node:fs';
+          const token = process.env.VERCEL_TOKEN;
+          const team = process.env.VERCEL_TEAM_ID;
+          const name = process.env.VERCEL_PROJECT_NAME;
+          async function api(path, init = {}) {
+            const response = await fetch(`https://api.vercel.com${path}`, {
+              ...init,
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                ...(init.headers || {})
+              }
+            });
+            const text = await response.text();
+            let data = {};
+            try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text }; }
+            if (!response.ok) throw new Error(`Vercel ${response.status}: ${data?.error?.message || data.message || text}`);
+            return data;
+          }
+          let project;
+          const found = await fetch(`https://api.vercel.com/v9/projects/${name}?teamId=${team}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (found.ok) {
+            project = await found.json();
+          } else if (found.status === 404) {
+            project = await api(`/v11/projects?teamId=${team}`, {
+              method: 'POST',
+              body: JSON.stringify({ name, skipGitConnectDuringLink: true })
+            });
+          } else {
+            throw new Error(`Vercel lookup failed: ${found.status}`);
+          }
+          await api(`/v10/projects/${project.id}/env?upsert=true&teamId=${team}`, {
+            method: 'POST',
+            body: JSON.stringify([
+              { key: 'DATABASE_URL', value: process.env.ACS_DATABASE_URL, type: 'encrypted', target: ['production', 'preview'] },
+              { key: 'NEXT_PUBLIC_SITE_URL', value: process.env.SITE_URL, type: 'encrypted', target: ['production', 'preview'] }
+            ])
+          });
+          fs.mkdirSync('.vercel', { recursive: true });
+          fs.writeFileSync('.vercel/project.json', JSON.stringify({ projectId: project.id, orgId: team }));
+          NODE
+          node /tmp/vercel.mjs
+
+          deploy_once() {
+            npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" -T "$VERCEL_TEAM_ID" 2>&1
+          }
+
+          set +e
+          output="$(deploy_once)"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && printf '%s' "$output" | grep -qiE 'rate.?limit|too many'; then
+            sleep 75
+            set +e
+            output="$(deploy_once)"
+            rc=$?
+            set -e
+          fi
+          printf '%s\n' "$output"
+          if [ "$rc" -ne 0 ]; then
+            node /tmp/status.mjs failure acs/vercel 'Vercel deployment failed'
+            exit "$rc"
+          fi
+          vercel_url="$(printf '%s\n' "$output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -1 || true)"
+          test -n "$vercel_url"
+          printf 'VERCEL_URL=%s\n' "$vercel_url" >> "$GITHUB_ENV"
+          node /tmp/status.mjs success acs/vercel 'ACS deployed to Vercel' "$vercel_url"
+
+      - name: Provision and deploy Render
+        id: render
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/render.mjs <<'NODE'
+          import fs from 'node:fs';
+          const token = process.env.RENDER_API_KEY;
+          const name = process.env.RENDER_SERVICE_NAME;
+          const repo = 'https://github.com/a-castilho/a-castilho-site';
+          const apiBase = 'https://api.render.com/v1';
+          async function request(path, init = {}) {
+            const response = await fetch(apiBase + path, {
+              ...init,
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                ...(init.headers || {})
+              }
+            });
+            const text = await response.text();
+            let data = {};
+            try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text }; }
+            if (!response.ok) throw new Error(`Render ${response.status}: ${data.message || JSON.stringify(data)}`);
+            return data;
+          }
+          async function postStatus(state, context, description, target) {
+            const body = { state, context, description: description.slice(0, 140) };
+            if (target) body.target_url = target;
+            const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/statuses/${process.env.GITHUB_SHA}`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${process.env.GH_TOKEN}`,
+                Accept: 'application/vnd.github+json',
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(body)
+            });
+            if (!response.ok) throw new Error(`GitHub status failed: ${response.status}`);
+          }
+          const owners = await request('/owners?limit=100');
+          const ownerRow = Array.isArray(owners) ? owners[0] : owners?.data?.[0];
+          const ownerId = ownerRow?.owner?.id || ownerRow?.id;
+          if (!ownerId) throw new Error('Render workspace not found');
+
+          const listed = await request('/services?limit=100');
+          const rows = Array.isArray(listed) ? listed : (listed?.data || listed?.services || []);
+          let service = rows.map(x => x.service || x).find(x => x?.name === name);
+          const serviceDetails = {
+            runtime: 'node',
+            plan: 'free',
+            healthCheckPath: '/',
+            envSpecificDetails: {
+              buildCommand: 'npm install && npm run build',
+              startCommand: 'npm start'
+            }
+          };
+          let created = false;
+          if (!service) {
+            const result = await request('/services', {
+              method: 'POST',
+              body: JSON.stringify({
+                type: 'web_service',
+                name,
+                ownerId,
+                repo,
+                branch: 'main',
+                autoDeploy: 'no',
+                envVars: [
+                  { key: 'DATABASE_URL', value: process.env.ACS_DATABASE_URL },
+                  { key: 'NEXT_PUBLIC_SITE_URL', value: process.env.SITE_URL }
+                ],
+                serviceDetails
+              })
+            });
+            service = result?.service || result;
+            created = true;
+          } else {
+            if (service.type && service.type !== 'web_service') throw new Error(`Existing Render service ${name} is ${service.type}`);
+            await request(`/services/${service.id}`, {
+              method: 'PATCH',
+              body: JSON.stringify({
+                name,
+                repo,
+                branch: 'main',
+                autoDeploy: 'no',
+                serviceDetails
+              })
+            });
+            await request(`/services/${service.id}/env-vars/DATABASE_URL`, {
+              method: 'PUT',
+              body: JSON.stringify({ value: process.env.ACS_DATABASE_URL })
+            });
+            await request(`/services/${service.id}/env-vars/NEXT_PUBLIC_SITE_URL`, {
+              method: 'PUT',
+              body: JSON.stringify({ value: process.env.SITE_URL })
+            });
+            await request(`/services/${service.id}/deploys`, {
+              method: 'POST',
+              body: JSON.stringify({ clearCache: 'do_not_clear' })
+            });
+          }
+
+          if (!service?.id) throw new Error('Render service id missing');
+          let details = await request(`/services/${service.id}`);
+          details = details?.service || details;
+          const url = details?.url || details?.serviceDetails?.url || `https://${name}.onrender.com`;
+          let ok = false;
+          let code = 0;
+          for (let i = 0; i < 30; i++) {
+            try {
+              const response = await fetch(url, { redirect: 'follow' });
+              code = response.status;
+              if (response.ok) { ok = true; break; }
+            } catch {}
+            await new Promise(resolve => setTimeout(resolve, 10000));
+          }
+          if (!ok) throw new Error(`Render service not live: HTTP ${code || 'unreachable'}`);
+          fs.appendFileSync(process.env.GITHUB_ENV, `RENDER_URL=${url}\n`);
+          await postStatus('success', 'acs/render', created ? 'ACS created and deployed on Render' : 'ACS redeployed on Render', url);
+          NODE
+
+          if ! node /tmp/render.mjs; then
+            node /tmp/status.mjs failure acs/render 'Render deployment failed'
+            exit 1
+          fi
+
+      - name: Smoke test public deployments
+        if: steps.vercel.outcome == 'success' && steps.render.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for base in "$VERCEL_URL" "$RENDER_URL"; do
+            curl -fsSL --retry 3 --retry-delay 3 "$base" >/dev/null
+            response="$(curl -fsSL --retry 3 --retry-delay 3 -X POST "$base/api/contact" -H 'Content-Type: application/json' --data '{"website":"validation-bot"}')"
+            printf '%s' "$response" | grep -q '"ok":true'
+          done
+          node /tmp/status.mjs success acs/smoke 'Vercel and Render smoke tests passed'
+
+      - name: Final deployment status
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.vercel.outcome }}" = "success" ] && [ "${{ steps.render.outcome }}" = "success" ]; then
+            node /tmp/status.mjs success acs/develop 'ACS deployed successfully to Neon, Vercel and Render'
+          else
+            node /tmp/status.mjs failure acs/develop 'ACS deployment incomplete; inspect platform status checks'
+            exit 1
+          fi
