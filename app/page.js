@@ -27,7 +27,7 @@ const stack = ['Next.js', 'React', 'Node.js', 'TypeScript', 'Python', 'PostgreSQ
 
 const faqs = [
   ['Vocês trabalham apenas com projetos novos?', 'Não. Também atuamos em modernização, integrações, sustentação e evolução de produtos que já estão em produção.'],
-  ['A A Castilho pode entrar desde a fase de ideia?', 'Sim. A descoberta é justamente o momento de organizar o problema, reduzir incerteza e definir a melhor primeira versão do produto.'],
+  ['A ACS pode entrar desde a fase de ideia?', 'Sim. A descoberta é justamente o momento de organizar o problema, reduzir incerteza e definir a melhor primeira versão do produto.'],
   ['Vocês trabalham com inteligência artificial?', 'Sim. Aplicamos IA quando ela melhora um processo, produto ou decisão — com foco em uso prático, integração e governança.'],
   ['Como começa um projeto?', 'Começa com uma conversa sobre contexto, objetivo e restrições. A partir disso estruturamos uma direção técnica e comercial adequada ao desafio.']
 ];
@@ -36,9 +36,9 @@ export default function Home() {
   return (
     <main className="siteHome">
       <header className="nav wrap">
-        <a className="brand" href="#inicio" aria-label="A Castilho — início">
-          <span className="brandMark">AC</span>
-          <span>A Castilho</span>
+        <a className="brand" href="#inicio" aria-label="ACS — início">
+          <span className="brandMark">ACS</span>
+          <span>ACS</span>
         </a>
         <nav aria-label="Navegação principal">
           <a href="#solucoes">Soluções</a>
@@ -71,7 +71,7 @@ export default function Home() {
           </div>
           <div className="metric metricA"><small>Arquitetura</small><b>Escalável</b><span>pensada para evoluir</span></div>
           <div className="metric metricB"><small>Entrega</small><b>Iterativa</b><span>valor em ciclos curtos</span></div>
-          <div className="orb"><span>AC</span></div>
+          <div className="orb"><span>ACS</span></div>
         </div>
       </section>
 
@@ -127,7 +127,7 @@ export default function Home() {
 
       <section id="sobre" className="section manifesto">
         <div className="wrap manifestoGrid">
-          <div><span className="kicker">A CASTILHO</span><h2>Tecnologia construída para resolver problemas reais.</h2></div>
+          <div><span className="kicker">ACS</span><h2>Tecnologia construída para resolver problemas reais.</h2></div>
           <div><p>Somos parceiros de produto e engenharia. Aproximamos estratégia, design e desenvolvimento para construir soluções robustas sem perder velocidade, clareza e proximidade.</p><div className="pillRow"><span>Visão de negócio</span><span>Arquitetura escalável</span><span>Qualidade de código</span><span>Proximidade</span><span>IA aplicada</span></div></div>
         </div>
       </section>
@@ -162,9 +162,9 @@ export default function Home() {
       </section>
 
       <footer className="footer wrap">
-        <div className="brand"><span className="brandMark">AC</span><span>A Castilho</span></div>
+        <div className="brand"><span className="brandMark">ACS</span><span>ACS</span></div>
         <p>Software • Produto • IA</p>
-        <p>© 2026 A Castilho</p>
+        <p>© 2026 ACS</p>
       </footer>
     </main>
   );
