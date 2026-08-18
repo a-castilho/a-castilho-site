@@ -154,10 +154,9 @@ jobs:
           fi
 
           set +e
-          OUTPUT=$(npx --yes vercel@latest deploy \
+          OUTPUT=$(timeout 180s npx --yes vercel@latest deploy \
             --prebuilt \
             --prod \
-            --archive=tgz \
             --yes \
             --no-color \
             --token="$VERCEL_TOKEN" \
@@ -167,6 +166,10 @@ jobs:
           printf '%s\n' "$OUTPUT"
 
           if [ "$RC" -ne 0 ]; then
+            if [ "$RC" = "124" ]; then
+              /tmp/post-status failure failure/deploy-timeout "Vercel deployment timed out"
+              exit "$RC"
+            fi
             ERROR_LINE=$(printf '%s\n' "$OUTPUT" | grep -Ei 'error|failed|forbidden|unauthorized|limit|permission|access' | tail -n 1 || true)
             [ -n "$ERROR_LINE" ] || ERROR_LINE=$(printf '%s\n' "$OUTPUT" | tail -n 1)
             SLUG=$(printf '%s' "$ERROR_LINE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-65)
