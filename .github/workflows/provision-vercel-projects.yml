@@ -55,8 +55,8 @@ jobs:
           const specs=[
             {name:'a-castilho-site'},
             {name:'regulaai'},
-            {name:'maquinadeleads',root:'maquina-de-leads/frontend',repo:'https://github.com/a-castilho/maquinadeleads.git',cwd:'maquina-de-leads/frontend'},
-            {name:'telaviva',root:'preview',repo:'https://github.com/acastilho/telaviva.git',cwd:'preview'}
+            {name:'maquinadeleads',root:'maquina-de-leads/frontend',repo:'https://github.com/a-castilho/maquinadeleads.git'},
+            {name:'telaviva',root:'preview',repo:'https://github.com/acastilho/telaviva.git'}
           ];
           for(const x of specs){
             try{
@@ -65,14 +65,15 @@ jobs:
               if(!x.repo) continue;
               const base=`/tmp/${x.name}`; fs.rmSync(base,{recursive:true,force:true});
               execFileSync('git',['clone','--depth','1',x.repo,base],{stdio:'inherit'});
-              const work=`${base}/${x.cwd}`; fs.mkdirSync(`${work}/.vercel`,{recursive:true});
-              fs.writeFileSync(`${work}/.vercel/project.json`,JSON.stringify({projectId:p.id,orgId:team}));
-              const out=execFileSync('npx',['--yes','vercel@latest','deploy','--prod','--yes','--token',token,'-T',team],{cwd:work,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+              fs.mkdirSync(`${base}/.vercel`,{recursive:true});
+              fs.writeFileSync(`${base}/.vercel/project.json`,JSON.stringify({projectId:p.id,orgId:team}));
+              const out=execFileSync('npx',['--yes','vercel@latest','deploy','--prod','--yes','--token',token,'-T',team],{cwd:base,encoding:'utf8',stdio:['ignore','pipe','pipe']});
               const urls=[...out.matchAll(/https:\/\/[^\s]+\.vercel\.app/g)].map(m=>m[0]);
               const url=urls.at(-1)||`https://${x.name}.vercel.app`;
               await status('success',`vercel/deploy/${x.name}`,`${x.name} deployed`,url);
             }catch(e){
-              await status('failure',`vercel/${x.name}`,String(e.message));
+              const reason=String(e.message||e).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'unknown';
+              await status('failure',`vercel/${x.name}/${reason}`,String(e.message||e));
             }
           }
           NODE
