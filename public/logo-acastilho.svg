@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">A Castilho</title>
+  <desc id="desc">Letra A geométrica em verde neon dentro de um círculo orbital.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#52ffad"/>
+      <stop offset="1" stop-color="#14d777"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g fill="none" stroke="url(#g)" stroke-width="8" stroke-linecap="round" filter="url(#glow)">
+    <path d="M139 403A198 198 0 0 1 394 111"/>
+    <path d="M419 140A198 198 0 0 1 158 427"/>
+  </g>
+  <circle cx="411" cy="124" r="17" fill="url(#g)" filter="url(#glow)"/>
+  <g fill="url(#g)" filter="url(#glow)">
+    <path d="M256 126 135 380h54l67-151 67 151h54L256 126z"/>
+    <path d="M230 323h52l18 41h-88l18-41z"/>
+  </g>
+</svg>
