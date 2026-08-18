@@ -26,6 +26,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "Starting Render live verification"
           cat > /tmp/verify.mjs <<'NODE'
           const ghToken=process.env.GH_TOKEN, token=process.env.RENDER_API_KEY;
           const repo=process.env.GITHUB_REPOSITORY, sha=process.env.GITHUB_SHA;
