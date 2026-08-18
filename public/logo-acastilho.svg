@@ -42,4 +42,5 @@
   </g>
 
   <circle cx="385" cy="103" r="19" fill="url(#ring)" stroke="#9affe0" stroke-width="2.5" filter="url(#softGlow)"/>
+  <!-- deploy-sync: 2026-08-18 -->
 </svg>
