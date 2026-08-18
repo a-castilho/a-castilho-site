@@ -211,7 +211,12 @@ jobs:
             set -e
 
             if [ "$ADD_RC" -ne 0 ]; then
-              ERR=$(printf '%s\n' "$ADD_OUTPUT" | grep -Ei 'error|failed|forbidden|unauthorized|terms|permission|limit' | tail -n 1 || true)
+              if printf '%s\n' "$ADD_OUTPUT" | grep -Eqi 'terms|accept.*terms'; then
+                /tmp/post-status failure failure/neon-marketplace-terms-required "Accept Neon integration terms once in Vercel"
+                exit "$ADD_RC"
+              fi
+
+              ERR=$(printf '%s\n' "$ADD_OUTPUT" | grep -Ei 'error|failed|forbidden|unauthorized|permission|limit' | tail -n 1 || true)
               [ -n "$ERR" ] || ERR=$(printf '%s\n' "$ADD_OUTPUT" | tail -n 1)
               SLUG=$(printf '%s' "$ERR" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-55)
               [ -n "$SLUG" ] || SLUG=unknown
