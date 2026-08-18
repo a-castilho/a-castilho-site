@@ -1,0 +1,102 @@
+name: Deploy Vercel on demand
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: Project to deploy
+        required: true
+        type: choice
+        options:
+          - a-castilho-site
+          - maquinadeleads
+          - telaviva
+          - regulaai
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'public/**'
+      - 'db/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'next.config.*'
+      - 'vercel.json'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve project
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="${{ github.event.inputs.project }}"
+          if [ -z "$PROJECT" ]; then PROJECT="a-castilho-site"; fi
+          case "$PROJECT" in
+            a-castilho-site)
+              REPO="https://github.com/a-castilho/a-castilho-site.git"; ROOT="." ;;
+            maquinadeleads)
+              REPO="https://github.com/a-castilho/maquinadeleads.git"; ROOT="maquina-de-leads/frontend" ;;
+            telaviva)
+              REPO="https://github.com/acastilho/telaviva.git"; ROOT="preview" ;;
+            regulaai)
+              REPO="https://github.com/acastilho/regulaai.git"; ROOT="." ;;
+            *) echo "Unknown project: $PROJECT"; exit 2 ;;
+          esac
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "${{ steps.resolve.outputs.repo }}" /tmp/source
+
+      - name: Link and deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN"
+          PROJECT="${{ steps.resolve.outputs.project }}"
+          ROOT="${{ steps.resolve.outputs.root }}"
+          cd "/tmp/source/$ROOT"
+          mkdir -p .vercel
+          HTTP=$(curl -sS -o /tmp/project.json -w '%{http_code}' \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v9/projects/$PROJECT?teamId=$VERCEL_TEAM_ID")
+          if [ "$HTTP" != "200" ]; then
+            echo "Vercel project $PROJECT is not ready (HTTP $HTTP)"
+            cat /tmp/project.json
+            exit 1
+          fi
+          PROJECT_ID=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/project.json','utf8'));process.stdout.write(x.id)")
+          node -e "const fs=require('fs');fs.writeFileSync('.vercel/project.json',JSON.stringify({projectId:process.argv[1],orgId:process.argv[2]}))" "$PROJECT_ID" "$VERCEL_TEAM_ID"
+          set +e
+          OUT=$(npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" -T "$VERCEL_TEAM_ID" 2>&1)
+          RC=$?
+          set -e
+          printf '%s\n' "$OUT"
+          if [ "$RC" -ne 0 ]; then
+            if printf '%s\n' "$OUT" | grep -qi 'rate'; then
+              echo "Vercel build-rate limit still active"
+            fi
+            exit "$RC"
+          fi
+          URL=$(printf '%s\n' "$OUT" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)
+          echo "Deployment URL: $URL"
