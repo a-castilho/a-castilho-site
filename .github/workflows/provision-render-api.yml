@@ -1,0 +1,83 @@
+name: Provision Render services
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/provision-render-api.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  provision-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Provision independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/render.mjs <<'NODE'
+          const token=process.env.RENDER_API_KEY;
+          const ghToken=process.env.GH_TOKEN;
+          const ghRepo=process.env.GITHUB_REPOSITORY;
+          const sha=process.env.GITHUB_SHA;
+          if(!token) throw new Error('RENDER_API_KEY missing');
+          const base='https://api.render.com/v1';
+          async function status(state,context,description,target_url){
+            const body={state,context,description:description.slice(0,140)};
+            if(target_url) body.target_url=target_url;
+            const r=await fetch(`https://api.github.com/repos/${ghRepo}/statuses/${sha}`,{method:'POST',headers:{Authorization:`Bearer ${ghToken}`,'Accept':'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(!r.ok) throw new Error(`status:${r.status}`);
+          }
+          async function request(path,init={}){
+            const r=await fetch(base+path,{...init,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(init.headers||{})}});
+            const text=await r.text(); let data=null; try{data=text?JSON.parse(text):null}catch{data=text}
+            if(!r.ok){const e=new Error(typeof data==='string'?data:JSON.stringify(data)); e.code=r.status; throw e}
+            return data;
+          }
+          await status('pending','render/provision','Provisioning Render services');
+          const owners=await request('/owners?limit=100');
+          const first=Array.isArray(owners)?owners[0]:owners?.data?.[0];
+          const ownerId=first?.owner?.id||first?.id;
+          if(!ownerId) throw new Error('workspace-not-found');
+          const listed=await request('/services?limit=100');
+          const rows=Array.isArray(listed)?listed:(listed?.data||listed?.services||[]);
+          const existing=new Map(rows.map(x=>{const s=x.service||x;return[s.name,s]}));
+          const specs=[
+            {name:'maquinadeleads-homolog-api',type:'web_service',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/backend',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'npm start'}}},
+            {name:'maquinadeleads-homolog-web',type:'static_site',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/frontend',serviceDetails:{buildCommand:'npm ci && npm run build',publishPath:'dist'}},
+            {name:'telaviva-homolog',type:'static_site',repo:'https://github.com/acastilho/telaviva',rootDir:'preview',serviceDetails:{buildCommand:'echo TelaViva static homologation preview',publishPath:'.'}},
+            {name:'devpilot-homolog',type:'web_service',repo:'https://github.com/a-castilho/devpilot',rootDir:'.',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'uvicorn app.main:app --host 0.0.0.0 --port $PORT'}}}
+          ];
+          let failures=0;
+          for(const spec of specs){
+            try{
+              let s=existing.get(spec.name);
+              if(!s){
+                await status('pending',`render/${spec.name}`,`Creating ${spec.name}`);
+                const created=await request('/services',{method:'POST',body:JSON.stringify({...spec,ownerId,branch:'main',autoDeploy:'yes'})});
+                s=created?.service||created;
+              }
+              const target=s?.url||(s?.id?`https://dashboard.render.com/web/${s.id}`:undefined);
+              await status('success',`render/${spec.name}`,`${spec.name} created`,target);
+            }catch(e){
+              failures++;
+              const code=e.code||'error';
+              await status('failure',`render/${spec.name}/http-${code}`,`${spec.name} failed (${code})`);
+            }
+          }
+          if(failures===0){await status('success','render/provision','All Render services provisioned');}
+          else{await status('failure','render/provision',`${failures} Render service(s) need retry`); process.exit(1);}
+          NODE
+          node /tmp/render.mjs
