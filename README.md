@@ -1,6 +1,6 @@
-# A Castilho — Site Institucional
+# ACS — Site Institucional
 
-Site institucional da A Castilho, desenvolvido em Next.js com foco em posicionamento comercial como parceira de software, produto e inteligência artificial.
+Site institucional da ACS, desenvolvido em Next.js com foco em posicionamento comercial como parceira de software, produto e inteligência artificial.
 
 ## Stack
 - Next.js 15
