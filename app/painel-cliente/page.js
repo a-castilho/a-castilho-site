@@ -5,14 +5,14 @@ import './painel-cliente.css';
 
 const initialTickets = [
   {
-    id: 'AC-1024',
+    id: 'ACS-1024',
     assunto: 'Acesso ao ambiente de homologação',
     departamento: 'Suporte técnico',
     status: 'Em andamento',
     updatedAt: 'Hoje, 10:42'
   },
   {
-    id: 'AC-1018',
+    id: 'ACS-1018',
     assunto: 'Dúvida sobre integração',
     departamento: 'Projetos',
     status: 'Respondido',
@@ -52,7 +52,7 @@ export default function PainelCliente() {
     if (!subject) return;
 
     const newTicket = {
-      id: `AC-${String(Date.now()).slice(-6)}`,
+      id: `ACS-${String(Date.now()).slice(-6)}`,
       assunto: subject,
       departamento: String(data.get('departamento') || 'Suporte técnico'),
       status: 'Aberto',
@@ -70,10 +70,10 @@ export default function PainelCliente() {
   return (
     <main className="clientShell">
       <header className="clientTopbar">
-        <a className="clientBrand" href="/" aria-label="Voltar ao site A Castilho">
-          <span className="clientBrandMark">AC</span>
+        <a className="clientBrand" href="/" aria-label="Voltar ao site ACS">
+          <span className="clientBrandMark">ACS</span>
           <span>
-            <strong>A Castilho</strong>
+            <strong>ACS</strong>
             <small>Painel do Cliente</small>
           </span>
         </a>
@@ -146,7 +146,7 @@ export default function PainelCliente() {
 
               <aside className="clientPanel supportPanel">
                 <small>PRECISA DE AJUDA?</small>
-                <h2>Fale com a A Castilho</h2>
+                <h2>Fale com a ACS</h2>
                 <p>Para assuntos urgentes ou dúvidas antes de abrir um chamado, utilize nossos canais de atendimento.</p>
                 <div className="supportItems">
                   <span><i>01</i><b>Suporte técnico</b></span>
@@ -201,7 +201,7 @@ export default function PainelCliente() {
       </div>
 
       <footer className="clientFooter">
-        <span>© 2026 A Castilho</span>
+        <span>© 2026 ACS</span>
         <span>Software • Produto • IA</span>
         <a href="/">acastilho.com.br</a>
       </footer>
