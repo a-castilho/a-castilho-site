@@ -45,6 +45,7 @@ export default function Home() {
           <a href="#processo">Processo</a>
           <a href="#impacto">Impacto</a>
           <a href="#sobre">Sobre</a>
+          <a href="/painel-cliente">Painel do Cliente</a>
         </nav>
         <a className="button small" href="#contato">Falar com especialista</a>
       </header>
