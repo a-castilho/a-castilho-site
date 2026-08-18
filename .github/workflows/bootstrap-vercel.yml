@@ -22,7 +22,7 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
-      VERCEL_TEAM_SLUG: maquina-de-leads1
+      VERCEL_ORG_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
       VERCEL_PROJECT_NAME: ${{ github.event.repository.name }}
 
     steps:
@@ -35,7 +35,6 @@ jobs:
           curl -fsS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -d '{"state":"pending","context":"automation/pipeline","description":"Automatic provisioning and deploy started"}' >/dev/null
 
@@ -47,11 +46,10 @@ jobs:
           test -n "$DATABASE_URL" || (echo "Missing GitHub secret: DATABASE_URL" && exit 1)
 
       - name: Mark secrets success
+        if: ${{ steps.secrets.outcome == 'success' }}
         shell: bash
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -d '{"state":"success","context":"automation/secrets","description":"Required deployment secrets are available"}' >/dev/null
 
@@ -62,11 +60,10 @@ jobs:
           node-version: 20
 
       - name: Mark Node success
+        if: ${{ steps.node.outcome == 'success' }}
         shell: bash
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -d '{"state":"success","context":"automation/node","description":"Node.js environment is ready"}' >/dev/null
 
@@ -75,73 +72,41 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           PROJECT_RESPONSE=$(mktemp)
           HTTP_CODE=$(curl -sS -o "$PROJECT_RESPONSE" -w "%{http_code}" \
             -H "Authorization: Bearer $VERCEL_TOKEN" \
             "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_NAME?teamId=$VERCEL_TEAM_ID")
-          echo "http_code=$HTTP_CODE" >> "$GITHUB_OUTPUT"
 
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "Reusing existing Vercel project: $VERCEL_PROJECT_NAME"
-          elif [ "$HTTP_CODE" = "404" ]; then
+          if [ "$HTTP_CODE" = "404" ]; then
             node --input-type=module > /tmp/vercel-project.json <<'EOF'
-          const body = {
-            name: process.env.VERCEL_PROJECT_NAME,
-            framework: 'nextjs'
-          };
+          const body = { name: process.env.VERCEL_PROJECT_NAME, framework: 'nextjs' };
           process.stdout.write(JSON.stringify(body));
           EOF
-
             HTTP_CODE=$(curl -sS -o "$PROJECT_RESPONSE" -w "%{http_code}" \
               -X POST \
               -H "Authorization: Bearer $VERCEL_TOKEN" \
               -H "Content-Type: application/json" \
               --data-binary @/tmp/vercel-project.json \
               "https://api.vercel.com/v11/projects?teamId=$VERCEL_TEAM_ID")
-            echo "http_code=$HTTP_CODE" >> "$GITHUB_OUTPUT"
+          fi
 
-            if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
-              echo "Failed to create Vercel project. HTTP $HTTP_CODE"
-              cat "$PROJECT_RESPONSE"
-              exit 1
-            fi
-            echo "Created Vercel project: $VERCEL_PROJECT_NAME"
-          else
-            echo "Failed to query Vercel project. HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
+            echo "Vercel project provisioning failed with HTTP $HTTP_CODE"
             cat "$PROJECT_RESPONSE"
             exit 1
           fi
 
           VERCEL_PROJECT_ID=$(node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(!x.id) process.exit(2); process.stdout.write(x.id)" "$PROJECT_RESPONSE")
-          export VERCEL_PROJECT_ID
           echo "VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID" >> "$GITHUB_ENV"
-
           mkdir -p .vercel
-          node -e "const fs=require('fs'); fs.writeFileSync('.vercel/project.json', JSON.stringify({projectId:process.env.VERCEL_PROJECT_ID,orgId:process.env.VERCEL_TEAM_ID}))"
-
-          echo "## Vercel provisioning" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Project: **$VERCEL_PROJECT_NAME**" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Project ID: \`$VERCEL_PROJECT_ID\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Repository: \`$GITHUB_REPOSITORY\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Mark Vercel provisioning failure
-        if: ${{ failure() && steps.provision.outcome == 'failure' }}
-        shell: bash
-        run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -d '{"state":"failure","context":"failure/vercel-provision-${{ steps.provision.outputs.http_code }}","description":"Vercel project provisioning failed"}' >/dev/null
+          node -e "const fs=require('fs'); fs.writeFileSync('.vercel/project.json', JSON.stringify({projectId:process.argv[1],orgId:process.argv[2]}))" "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID"
+          echo "- Vercel project: $VERCEL_PROJECT_NAME ($VERCEL_PROJECT_ID)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Mark Vercel provisioning success
         if: ${{ steps.provision.outcome == 'success' }}
         shell: bash
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -d '{"state":"success","context":"automation/vercel-provision","description":"Vercel project is ready"}' >/dev/null
 
@@ -150,7 +115,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           node --input-type=module > /tmp/vercel-env.json <<'EOF'
           const body = [{
             key: 'DATABASE_URL',
@@ -167,37 +131,23 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @/tmp/vercel-env.json \
             "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env?upsert=true&teamId=$VERCEL_TEAM_ID")
-          echo "http_code=$HTTP_CODE" >> "$GITHUB_OUTPUT"
 
           if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
-            echo "Failed to configure Vercel environment. HTTP $HTTP_CODE"
+            echo "Vercel environment configuration failed with HTTP $HTTP_CODE"
             cat /tmp/vercel-env-response.json
             exit 1
           fi
 
-          echo "DATABASE_URL configured for production and preview."
-
-      - name: Mark environment failure
-        if: ${{ failure() && steps.vercel_env.outcome == 'failure' }}
-        shell: bash
-        run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -d '{"state":"failure","context":"failure/vercel-env-${{ steps.vercel_env.outputs.http_code }}","description":"Vercel environment configuration failed"}' >/dev/null
-
-      - name: Mark environment success
+      - name: Mark Vercel environment success
         if: ${{ steps.vercel_env.outcome == 'success' }}
         shell: bash
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -d '{"state":"success","context":"automation/vercel-env","description":"Production environment configured"}' >/dev/null
+            -d '{"state":"success","context":"automation/vercel-env","description":"DATABASE_URL configured in Vercel"}' >/dev/null
 
-      - name: Install dependencies
+      - name: Install application dependencies
+        id: deps
         run: npm install
 
       - name: Validate application build
@@ -206,45 +156,65 @@ jobs:
         env:
           NEXT_PUBLIC_SITE_URL: https://acastilho.com.br
 
-      - name: Mark build failure
-        if: ${{ failure() && steps.app_build.outcome == 'failure' }}
-        shell: bash
-        run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -d '{"state":"failure","context":"failure/app-build","description":"Next.js production build failed"}' >/dev/null
-
-      - name: Mark build success
+      - name: Mark application build success
         if: ${{ steps.app_build.outcome == 'success' }}
         shell: bash
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -d '{"state":"success","context":"automation/build","description":"Next.js production build passed"}' >/dev/null
 
-      - name: Install Vercel CLI
-        run: npm install --no-save vercel@latest
-
-      - name: Pull production configuration
-        run: npx vercel pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG"
-
-      - name: Build Vercel production artifact
-        run: npx vercel build --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG"
-
-      - name: Deploy production
+      - name: Pull Vercel production configuration
+        id: vercel_pull
         shell: bash
         run: |
           set -euo pipefail
-          DEPLOYMENT_URL=$(npx vercel deploy --prebuilt --prod --yes --no-color --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG" | tail -n 1)
+          npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Mark Vercel pull success
+        if: ${{ steps.vercel_pull.outcome == 'success' }}
+        shell: bash
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/vercel-pull","description":"Vercel production configuration pulled"}' >/dev/null
+
+      - name: Build Vercel production artifact
+        id: vercel_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
+
+      - name: Mark Vercel artifact success
+        if: ${{ steps.vercel_build.outcome == 'success' }}
+        shell: bash
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/vercel-build","description":"Vercel production artifact built"}' >/dev/null
+
+      - name: Deploy production
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOYMENT_URL=$(npx --yes vercel@latest deploy --prebuilt --prod --yes --no-color --token="$VERCEL_TOKEN" | tail -n 1)
+          test -n "$DEPLOYMENT_URL"
           echo "DEPLOYMENT_URL=$DEPLOYMENT_URL" >> "$GITHUB_ENV"
           echo "- Production: $DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"
           echo "Deployment URL: $DEPLOYMENT_URL"
 
+      - name: Mark deploy success
+        if: ${{ steps.deploy.outcome == 'success' }}
+        shell: bash
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/deploy","description":"Production deployment created"}' >/dev/null
+
       - name: Validate production health
+        id: health
         shell: bash
         run: |
           set -euo pipefail
@@ -252,24 +222,28 @@ jobs:
             STATUS=$(curl -L -sS -o /tmp/health.json -w "%{http_code}" "$DEPLOYMENT_URL/api/health" || true)
             if [ "$STATUS" = "200" ]; then
               cat /tmp/health.json
-              echo "- Health: ✅" >> "$GITHUB_STEP_SUMMARY"
-              echo "Production health check passed."
+              echo "- Health: passed" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             echo "Attempt $i: HTTP $STATUS"
             sleep 10
           done
-          echo "Health check failed for $DEPLOYMENT_URL"
           cat /tmp/health.json 2>/dev/null || true
           exit 1
+
+      - name: Mark health success
+        if: ${{ steps.health.outcome == 'success' }}
+        shell: bash
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/health","description":"Production health check passed"}' >/dev/null
 
       - name: Mark automation success
         if: success()
         shell: bash
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -d '{"state":"success","context":"automation/pipeline","description":"Production deploy and health check passed"}' >/dev/null
 
@@ -277,8 +251,6 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -d '{"state":"failure","context":"automation/pipeline","description":"Automatic deploy failed; inspect Actions logs"}' >/dev/null
+            -d '{"state":"failure","context":"automation/pipeline","description":"Automatic deploy failed; last success context identifies the stage"}' >/dev/null
