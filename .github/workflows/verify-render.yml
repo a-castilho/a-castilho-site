@@ -1,0 +1,83 @@
+name: Verify Render provisioning
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-render.yml'
+      - 'infra/projects.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+    steps:
+      - name: Prepare status reporter
+        shell: bash
+        run: |
+          cat > /tmp/post-status <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          state="$1"; context="$2"; description="$3"
+          payload=$(node -e 'process.stdout.write(JSON.stringify({state:process.argv[1],context:process.argv[2],description:process.argv[3]}))' "$state" "$context" "$description")
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$payload" >/dev/null
+          EOF
+          chmod +x /tmp/post-status
+          /tmp/post-status pending verification/render "Checking Render provisioning"
+
+      - name: Validate Render key
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$RENDER_API_KEY" ]; then
+            /tmp/post-status failure verification/render-secret "RENDER_API_KEY missing"
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/services.json -w '%{http_code}' \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            'https://api.render.com/v1/services?limit=100')
+          if [ "$code" != "200" ]; then
+            /tmp/post-status failure verification/render-secret "Render API key rejected"
+            exit 1
+          fi
+          /tmp/post-status success verification/render-secret "Render API key accepted"
+
+      - name: Wait for expected Render services
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(devpilot-homolog maquinadeleads-homolog-api maquinadeleads-homolog-web telaviva-homolog)
+          for attempt in {1..12}; do
+            curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" 'https://api.render.com/v1/services?limit=100' > /tmp/services.json
+            missing=0
+            for name in "${expected[@]}"; do
+              if ! node - "$name" <<'NODE'
+          const fs=require('fs');
+          const name=process.argv[2];
+          const x=JSON.parse(fs.readFileSync('/tmp/services.json','utf8'));
+          const rows=Array.isArray(x)?x:(x.services||x.data||[]);
+          process.exit(rows.some(r=>(r.service?.name||r.name)===name)?0:1);
+          NODE
+              then missing=$((missing+1)); fi
+            done
+            if [ "$missing" -eq 0 ]; then
+              /tmp/post-status success verification/render-services "All expected Render services exist"
+              /tmp/post-status success verification/render "Render provisioning verified"
+              exit 0
+            fi
+            sleep 10
+          done
+          /tmp/post-status failure verification/render-services "One or more Render services are missing"
+          /tmp/post-status failure verification/render "Render provisioning incomplete"
+          exit 1
