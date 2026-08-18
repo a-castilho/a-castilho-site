@@ -90,6 +90,7 @@ jobs:
           fi
 
           VERCEL_PROJECT_ID=$(node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(!x.id) process.exit(2); process.stdout.write(x.id)" "$PROJECT_RESPONSE")
+          export VERCEL_PROJECT_ID
           echo "VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID" >> "$GITHUB_ENV"
 
           mkdir -p .vercel
