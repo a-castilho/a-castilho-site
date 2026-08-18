@@ -134,3 +134,5 @@ jobs:
           done
           echo "Health check failed for $DEPLOYMENT_URL"
           exit 1
+
+# automation-bootstrap-trigger: 2026-08-18T13:34-03:00
