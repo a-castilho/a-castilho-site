@@ -45,6 +45,7 @@ export default function Home() {
           <a href="#processo">Processo</a>
           <a href="#impacto">Impacto</a>
           <a href="#sobre">Sobre</a>
+          <a href="/homologacao">Produtos em homologação</a>
         </nav>
         <a className="button small" href="#contato">Falar com especialista</a>
       </header>
