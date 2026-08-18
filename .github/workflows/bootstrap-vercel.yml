@@ -1,0 +1,132 @@
+name: Bootstrap Vercel production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
+      VERCEL_TEAM_SLUG: maquina-de-leads1
+      VERCEL_PROJECT_NAME: a-castilho-site
+      GITHUB_REPOSITORY_FULL: acastilho/a-castilho-site
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          test -n "$VERCEL_TOKEN" || (echo "Missing GitHub secret: VERCEL_TOKEN" && exit 1)
+          test -n "$DATABASE_URL" || (echo "Missing GitHub secret: DATABASE_URL" && exit 1)
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deployment tooling
+        run: npm install --no-save @vercel/sdk@latest vercel@latest
+
+      - name: Create Vercel project, configure environment and deploy
+        shell: bash
+        run: |
+          node --input-type=module <<'EOF'
+          import { Vercel } from '@vercel/sdk';
+          import fs from 'node:fs';
+
+          const vercel = new Vercel({ bearerToken: process.env.VERCEL_TOKEN });
+          const teamId = process.env.VERCEL_TEAM_ID;
+          const slug = process.env.VERCEL_TEAM_SLUG;
+          const name = process.env.VERCEL_PROJECT_NAME;
+          const [org, repo] = process.env.GITHUB_REPOSITORY_FULL.split('/');
+
+          const created = await vercel.projects.createProject({
+            teamId,
+            slug,
+            requestBody: {
+              name,
+              framework: 'nextjs',
+              gitRepository: {
+                repo: `${org}/${repo}`,
+                type: 'github'
+              }
+            }
+          });
+
+          const project = created.value ?? created;
+          if (!project?.id) throw new Error('Vercel project was created without a project id.');
+
+          await vercel.projects.createProjectEnv({
+            teamId,
+            slug,
+            idOrName: project.id,
+            upsert: 'true',
+            requestBody: [
+              {
+                key: 'DATABASE_URL',
+                value: process.env.DATABASE_URL,
+                type: 'encrypted',
+                target: ['production', 'preview']
+              }
+            ]
+          });
+
+          const deploymentResult = await vercel.deployments.createDeployment({
+            teamId,
+            slug,
+            requestBody: {
+              name,
+              target: 'production',
+              gitSource: {
+                type: 'github',
+                repo,
+                ref: 'main',
+                org
+              }
+            }
+          });
+
+          const deployment = deploymentResult.value ?? deploymentResult;
+          const deploymentUrl = deployment.url ? `https://${deployment.url}` : '';
+
+          fs.appendFileSync(process.env.GITHUB_ENV, `VERCEL_PROJECT_ID=${project.id}\n`);
+          if (deploymentUrl) fs.appendFileSync(process.env.GITHUB_ENV, `DEPLOYMENT_URL=${deploymentUrl}\n`);
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `## A Castilho — Vercel bootstrap\n\n` +
+            `- Project: **${name}**\n` +
+            `- Project ID: \`${project.id}\`\n` +
+            `- Deployment: ${deploymentUrl || 'created; URL pending'}\n` +
+            `- Git repository: \`${org}/${repo}\`\n`
+          );
+          EOF
+
+      - name: Wait for deployment and validate health endpoint
+        if: env.DEPLOYMENT_URL != ''
+        shell: bash
+        run: |
+          echo "Deployment URL: $DEPLOYMENT_URL"
+          for i in {1..30}; do
+            STATUS=$(curl -L -sS -o /tmp/health.json -w "%{http_code}" "$DEPLOYMENT_URL/api/health" || true)
+            if [ "$STATUS" = "200" ]; then
+              cat /tmp/health.json
+              echo "Health check passed."
+              echo "## Production health check ✅" >> "$GITHUB_STEP_SUMMARY"
+              echo "$DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS"
+            sleep 10
+          done
+          echo "Deployment was created but health check did not become ready in time."
+          exit 1
