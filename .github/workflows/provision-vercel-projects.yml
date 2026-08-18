@@ -1,0 +1,78 @@
+name: Provision Vercel projects
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/provision-vercel-projects.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Provision projects and deploy public frontends
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/vercel.mjs <<'NODE'
+          import {execFileSync} from 'node:child_process';
+          import fs from 'node:fs';
+          const token=process.env.VERCEL_TOKEN, team=process.env.VERCEL_TEAM_ID;
+          const ghToken=process.env.GH_TOKEN, ghRepo=process.env.GITHUB_REPOSITORY, sha=process.env.GITHUB_SHA;
+          if(!token) throw new Error('VERCEL_TOKEN missing');
+          async function status(state,context,description,target_url){
+            const body={state,context,description:description.slice(0,140)}; if(target_url) body.target_url=target_url;
+            await fetch(`https://api.github.com/repos/${ghRepo}/statuses/${sha}`,{method:'POST',headers:{Authorization:`Bearer ${ghToken}`,'Accept':'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
+          }
+          async function api(path,init={}){
+            const r=await fetch(`https://api.vercel.com${path}`,{...init,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(init.headers||{})}});
+            const text=await r.text(); let data={}; try{data=text?JSON.parse(text):{}}catch{data={message:text}}
+            return {ok:r.ok,status:r.status,data};
+          }
+          async function ensure(name,rootDirectory){
+            let r=await api(`/v9/projects/${name}?teamId=${team}`);
+            if(r.ok) return r.data;
+            const body={name,skipGitConnectDuringLink:true}; if(rootDirectory) body.rootDirectory=rootDirectory;
+            r=await api(`/v11/projects?teamId=${team}`,{method:'POST',body:JSON.stringify(body)});
+            if(!r.ok) throw new Error(`${name}:HTTP-${r.status}:${r.data?.error?.message||r.data?.message||'create-failed'}`);
+            return r.data;
+          }
+          const specs=[
+            {name:'a-castilho-site'},
+            {name:'regulaai'},
+            {name:'maquinadeleads',root:'maquina-de-leads/frontend',repo:'https://github.com/a-castilho/maquinadeleads.git',cwd:'maquina-de-leads/frontend'},
+            {name:'telaviva',root:'preview',repo:'https://github.com/acastilho/telaviva.git',cwd:'preview'}
+          ];
+          for(const x of specs){
+            try{
+              const p=await ensure(x.name,x.root);
+              await status('success',`vercel/project/${x.name}`,`${x.name} project ready`,`https://vercel.com/maquina-de-leads1/${x.name}`);
+              if(!x.repo) continue;
+              const base=`/tmp/${x.name}`; fs.rmSync(base,{recursive:true,force:true});
+              execFileSync('git',['clone','--depth','1',x.repo,base],{stdio:'inherit'});
+              const work=`${base}/${x.cwd}`; fs.mkdirSync(`${work}/.vercel`,{recursive:true});
+              fs.writeFileSync(`${work}/.vercel/project.json`,JSON.stringify({projectId:p.id,orgId:team}));
+              const out=execFileSync('npx',['--yes','vercel@latest','deploy','--prod','--yes','--token',token,'-T',team],{cwd:work,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+              const urls=[...out.matchAll(/https:\/\/[^\s]+\.vercel\.app/g)].map(m=>m[0]);
+              const url=urls.at(-1)||`https://${x.name}.vercel.app`;
+              await status('success',`vercel/deploy/${x.name}`,`${x.name} deployed`,url);
+            }catch(e){
+              await status('failure',`vercel/${x.name}`,String(e.message));
+            }
+          }
+          NODE
+          node /tmp/vercel.mjs
