@@ -70,8 +70,13 @@ jobs:
                 const created=await request('/services',{method:'POST',body:JSON.stringify({...spec,ownerId,branch:'main',autoDeploy:'yes'})});
                 s=created?.service||created;
               }
+              if(s?.id){
+                const detail=await request(`/services/${s.id}`);
+                s=detail?.service||detail||s;
+              }
               const target=s?.url||(s?.id?`https://dashboard.render.com/web/${s.id}`:undefined);
               await status('success',`render/${spec.name}`,`${spec.name} created`,target);
+              if(target?.includes('.onrender.com')) await status('success',`render-url/${spec.name}`,`${spec.name} public URL`,target);
             }catch(e){
               failures++;
               const code=e.code||'error';
