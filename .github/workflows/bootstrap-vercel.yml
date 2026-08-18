@@ -189,25 +189,23 @@ jobs:
             exit 0
           fi
 
-          # No additional Neon key is required in this branch. The existing
-          # Vercel token provisions/reuses a Vercel Marketplace Neon resource.
           RESOURCE_NAME="${VERCEL_PROJECT_NAME}-db"
 
           set +e
-          CONNECT_OUTPUT=$(npx --yes vercel@latest integration resource connect \
+          CONNECT_OUTPUT=$(timeout 60s npx --yes vercel@latest integration resource connect \
             "$RESOURCE_NAME" "$VERCEL_PROJECT_NAME" \
-            --yes --format=json \
+            --yes --format=json --non-interactive \
             --token="$VERCEL_TOKEN" -T "$VERCEL_TEAM_ID" 2>&1)
           CONNECT_RC=$?
           set -e
 
           if [ "$CONNECT_RC" -ne 0 ]; then
             set +e
-            ADD_OUTPUT=$(npx --yes vercel@latest integration add neon \
+            ADD_OUTPUT=$(timeout 60s npx --yes vercel@latest integration add neon \
               --name "$RESOURCE_NAME" \
               --plan free \
               -e production -e preview \
-              --format=json \
+              --format=json --non-interactive \
               --token="$VERCEL_TOKEN" -T "$VERCEL_TEAM_ID" 2>&1)
             ADD_RC=$?
             set -e
