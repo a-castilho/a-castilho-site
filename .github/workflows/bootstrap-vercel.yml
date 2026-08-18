@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: vercel-production-${{ github.repository }}
@@ -17,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      GH_TOKEN: ${{ github.token }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
@@ -26,6 +28,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Mark automation pending
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"pending","context":"automation/pipeline","description":"Automatic provisioning and deploy started"}' >/dev/null
 
       - name: Validate required secrets
         shell: bash
@@ -37,17 +49,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Validate application build
-        run: npm run build
-        env:
-          NEXT_PUBLIC_SITE_URL: https://acastilho.com.br
-
-      - name: Install Vercel CLI
-        run: npm install --no-save vercel@latest
 
       - name: Create or reuse Vercel project
         shell: bash
@@ -101,6 +102,15 @@ jobs:
           echo "- Project ID: \`$VERCEL_PROJECT_ID\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Repository: \`$GITHUB_REPOSITORY\`" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Mark Vercel provisioning success
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/vercel-provision","description":"Vercel project is ready"}' >/dev/null
+
       - name: Configure Vercel environment
         shell: bash
         run: |
@@ -131,10 +141,39 @@ jobs:
 
           echo "DATABASE_URL configured for production and preview."
 
+      - name: Mark environment success
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/vercel-env","description":"Production environment configured"}' >/dev/null
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Validate application build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SITE_URL: https://acastilho.com.br
+
+      - name: Mark build success
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/build","description":"Next.js production build passed"}' >/dev/null
+
+      - name: Install Vercel CLI
+        run: npm install --no-save vercel@latest
+
       - name: Pull production configuration
         run: npx vercel pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG"
 
-      - name: Build production artifact
+      - name: Build Vercel production artifact
         run: npx vercel build --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG"
 
       - name: Deploy production
@@ -164,3 +203,23 @@ jobs:
           echo "Health check failed for $DEPLOYMENT_URL"
           cat /tmp/health.json 2>/dev/null || true
           exit 1
+
+      - name: Mark automation success
+        if: success()
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"automation/pipeline","description":"Production deploy and health check passed"}' >/dev/null
+
+      - name: Mark automation failure
+        if: failure()
+        shell: bash
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"failure","context":"automation/pipeline","description":"Automatic deploy failed; inspect Actions logs"}' >/dev/null
