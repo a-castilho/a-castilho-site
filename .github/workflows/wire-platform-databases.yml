@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Resolve Neon and wire services
+      - name: Resolve Neon, wire services and verify live URLs
         shell: bash
         run: |
           set -euo pipefail
@@ -40,7 +40,6 @@ jobs:
           import fs from 'node:fs';
           const ghToken=process.env.GH_TOKEN, ghRepo=process.env.GITHUB_REPOSITORY, sha=process.env.GITHUB_SHA;
           const renderToken=process.env.RENDER_API_KEY, vercelToken=process.env.VERCEL_TOKEN, team=process.env.VERCEL_TEAM_ID;
-          const org=process.env.NEON_ORG_ID;
           async function status(state,context,description,target_url){
             const body={state,context,description:description.slice(0,140)}; if(target_url) body.target_url=target_url;
             await fetch(`https://api.github.com/repos/${ghRepo}/statuses/${sha}`,{method:'POST',headers:{Authorization:`Bearer ${ghToken}`,'Accept':'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -48,22 +47,25 @@ jobs:
           const raw=JSON.parse(fs.readFileSync('/tmp/neon-projects.json','utf8'));
           const projects=Array.isArray(raw)?raw:(raw.projects||raw.data||[]);
           function projectId(name){const p=projects.find(x=>x?.name===name); if(!p?.id) throw new Error(`Neon project not found: ${name}`); return p.id}
-          function conn(name){
-            const id=projectId(name);
-            return execFileSync('neon',['connection-string','--project-id',id,'--database-name','neondb','--role-name','neondb_owner','--pooled'],{encoding:'utf8',env:process.env}).trim();
-          }
+          function conn(name){return execFileSync('neon',['connection-string','--project-id',projectId(name),'--database-name','neondb','--role-name','neondb_owner','--pooled'],{encoding:'utf8',env:process.env}).trim()}
           async function renderReq(path,init={}){
             const r=await fetch(`https://api.render.com/v1${path}`,{...init,headers:{Authorization:`Bearer ${renderToken}`,'Content-Type':'application/json',...(init.headers||{})}});
             const text=await r.text(); let data={}; try{data=text?JSON.parse(text):{}}catch{data={message:text}}
             if(!r.ok) throw new Error(`Render ${r.status}: ${data.message||JSON.stringify(data)}`); return data;
           }
-          async function putRenderEnv(service,key,value){
-            await renderReq(`/services/${service}/env-vars/${encodeURIComponent(key)}`,{method:'PUT',body:JSON.stringify({value})});
-          }
+          async function putRenderEnv(service,key,value){await renderReq(`/services/${service}/env-vars/${encodeURIComponent(key)}`,{method:'PUT',body:JSON.stringify({value})})}
           async function vercelReq(path,init={}){
             const r=await fetch(`https://api.vercel.com${path}`,{...init,headers:{Authorization:`Bearer ${vercelToken}`,'Content-Type':'application/json',...(init.headers||{})}});
             const text=await r.text(); let data={}; try{data=text?JSON.parse(text):{}}catch{data={message:text}}
             if(!r.ok) throw new Error(`Vercel ${r.status}: ${data?.error?.message||data.message||JSON.stringify(data)}`); return data;
+          }
+          async function waitLive(name,url){
+            let code=0;
+            for(let i=0;i<18;i++){
+              try{const r=await fetch(url,{redirect:'follow'});code=r.status;if(r.ok){await status('success',`live/${name}`,`${name} live`,url);return true}}catch{}
+              await new Promise(r=>setTimeout(r,10000));
+            }
+            await status('failure',`live/${name}`,`${name} HTTP ${code||'unreachable'}`,url); return false;
           }
 
           const machineDb=conn('maquinadeleads');
@@ -71,8 +73,7 @@ jobs:
           await putRenderEnv(machineService,'DATABASE_URL',machineDb);
           await putRenderEnv(machineService,'PGSSL','true');
           await putRenderEnv(machineService,'JWT_EXPIRES_IN','7d');
-          let jwtExists=false;
-          try{await renderReq(`/services/${machineService}/env-vars/JWT_SECRET`);jwtExists=true}catch{}
+          let jwtExists=false; try{await renderReq(`/services/${machineService}/env-vars/JWT_SECRET`);jwtExists=true}catch{}
           if(!jwtExists) await putRenderEnv(machineService,'JWT_SECRET',crypto.randomBytes(48).toString('hex'));
           await renderReq(`/services/${machineService}/deploys`,{method:'POST',body:JSON.stringify({clearCache:'do_not_clear'})});
           await status('success','database/render-maquinadeleads','Neon database wired to Render API','https://dashboard.render.com/web/srv-da2c2prm8hqs73ein4e0');
@@ -81,5 +82,11 @@ jobs:
           const site=await vercelReq(`/v9/projects/a-castilho-site?teamId=${team}`);
           await vercelReq(`/v10/projects/${site.id}/env?upsert=true&teamId=${team}`,{method:'POST',body:JSON.stringify([{key:'DATABASE_URL',value:siteDb,type:'encrypted',target:['production','preview']}])});
           await status('success','database/vercel-a-castilho-site','Neon database wired to Vercel project','https://vercel.com/maquina-de-leads1/a-castilho-site');
+
+          await Promise.all([
+            waitLive('maquinadeleads-homolog-api','https://maquinadeleads-homolog-api.onrender.com/health'),
+            waitLive('maquinadeleads-homolog-web','https://maquinadeleads-homolog-web.onrender.com'),
+            waitLive('telaviva-homolog','https://telaviva-homolog.onrender.com')
+          ]);
           NODE
           node /tmp/wire.mjs
