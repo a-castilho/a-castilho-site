@@ -139,11 +139,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          rm -rf /tmp/vercel-release
-          mkdir -p /tmp/vercel-release/.vercel
-          cp -R .vercel/output /tmp/vercel-release/.vercel/output
-          cp .vercel/project.json /tmp/vercel-release/.vercel/project.json
-          cd /tmp/vercel-release
+          HIDDEN_GIT=""
+          restore_git() {
+            if [ -n "$HIDDEN_GIT" ] && [ -d "$HIDDEN_GIT" ] && [ ! -e .git ]; then
+              mv "$HIDDEN_GIT" .git
+            fi
+          }
+          trap restore_git EXIT
+
+          if [ -d .git ]; then
+            HIDDEN_GIT="/tmp/vercel-hidden-git-${GITHUB_RUN_ID:-$$}"
+            rm -rf "$HIDDEN_GIT"
+            mv .git "$HIDDEN_GIT"
+          fi
 
           set +e
           OUTPUT=$(npx --yes vercel@latest deploy \
