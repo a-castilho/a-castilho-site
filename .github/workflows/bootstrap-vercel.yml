@@ -38,7 +38,12 @@ jobs:
           state="$1"
           context="$2"
           description="$3"
-          payload=$(node -e 'process.stdout.write(JSON.stringify({state:process.argv[1],context:process.argv[2],description:process.argv[3]}))' "$state" "$context" "$description")
+          target="${4:-}"
+          payload=$(node -e '
+            const body={state:process.argv[1],context:process.argv[2],description:process.argv[3]};
+            if(process.argv[4]) body.target_url=process.argv[4];
+            process.stdout.write(JSON.stringify(body));
+          ' "$state" "$context" "$description" "$target")
           curl -fsS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -82,7 +87,6 @@ jobs:
 
           if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
             /tmp/post-status failure "failure/vercel-project-http-$HTTP_CODE" "Vercel project provisioning failed"
-            cat "$PROJECT_RESPONSE"
             exit 1
           fi
 
@@ -90,6 +94,7 @@ jobs:
           echo "VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID" >> "$GITHUB_ENV"
           mkdir -p .vercel
           node -e "const fs=require('fs'); fs.writeFileSync('.vercel/project.json', JSON.stringify({projectId:process.argv[1],orgId:process.argv[2]}))" "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID"
+          /tmp/post-status success "automation/project-$VERCEL_PROJECT_ID" "Vercel project identified"
 
           node --input-type=module > /tmp/vercel-env.json <<'EOF'
           process.stdout.write(JSON.stringify([{
@@ -109,17 +114,52 @@ jobs:
 
           if [ "$ENV_HTTP" != "200" ] && [ "$ENV_HTTP" != "201" ]; then
             /tmp/post-status failure "failure/vercel-env-http-$ENV_HTTP" "Vercel environment configuration failed"
-            cat /tmp/vercel-env-response.json
             exit 1
           fi
 
           /tmp/post-status success automation/vercel-provision "Vercel project and DATABASE_URL ready"
 
-      - name: Install and validate application
+      - name: Install application dependencies
+        run: npm install
+
+      - name: Validate database connectivity
         shell: bash
         run: |
           set -euo pipefail
-          npm install
+          set +e
+          DB_RESULT=$(node --input-type=module <<'EOF'
+          import { neon } from '@neondatabase/serverless';
+          try {
+            const sql = neon(process.env.DATABASE_URL);
+            await sql`select 1 as ok`;
+            console.log('ok');
+          } catch (error) {
+            const msg = String(error?.message || error).toLowerCase();
+            let code = 'unknown';
+            if (msg.includes('password authentication')) code = 'auth';
+            else if (msg.includes('does not exist')) code = 'database-missing';
+            else if (msg.includes('enotfound') || msg.includes('getaddrinfo')) code = 'dns';
+            else if (msg.includes('ssl') || msg.includes('tls')) code = 'ssl';
+            else if (msg.includes('timeout') || msg.includes('timed out')) code = 'timeout';
+            console.log(code);
+            process.exit(1);
+          }
+          EOF
+          )
+          RC=$?
+          set -e
+          DB_RESULT=$(printf '%s' "$DB_RESULT" | tail -n 1 | tr -cd 'a-z0-9-')
+          if [ "$RC" -ne 0 ]; then
+            [ -n "$DB_RESULT" ] || DB_RESULT=unknown
+            /tmp/post-status failure "failure/database-$DB_RESULT" "DATABASE_URL cannot connect from CI"
+            exit 1
+          fi
+          /tmp/post-status success automation/database "DATABASE_URL connectivity verified"
+
+      - name: Validate application build
+        shell: bash
+        run: |
+          set -euo pipefail
           NEXT_PUBLIC_SITE_URL=https://acastilho.com.br npm run build
           /tmp/post-status success automation/build "Next.js production build passed"
 
@@ -134,19 +174,14 @@ jobs:
           /tmp/post-status success automation/vercel-build "Vercel production artifact built"
 
       - name: Deploy prebuilt production artifact
-        id: deploy
         shell: bash
         run: |
           set -euo pipefail
-
           HIDDEN_GIT=""
           restore_git() {
-            if [ -n "$HIDDEN_GIT" ] && [ -d "$HIDDEN_GIT" ] && [ ! -e .git ]; then
-              mv "$HIDDEN_GIT" .git
-            fi
+            if [ -n "$HIDDEN_GIT" ] && [ -d "$HIDDEN_GIT" ] && [ ! -e .git ]; then mv "$HIDDEN_GIT" .git; fi
           }
           trap restore_git EXIT
-
           if [ -d .git ]; then
             HIDDEN_GIT="/tmp/vercel-hidden-git-${GITHUB_RUN_ID:-$$}"
             rm -rf "$HIDDEN_GIT"
@@ -155,12 +190,8 @@ jobs:
 
           set +e
           OUTPUT=$(timeout 180s npx --yes vercel@latest deploy \
-            --prebuilt \
-            --prod \
-            --yes \
-            --no-color \
-            --token="$VERCEL_TOKEN" \
-            -T "$VERCEL_TEAM_ID" 2>&1)
+            --prebuilt --prod --yes --no-color \
+            --token="$VERCEL_TOKEN" -T "$VERCEL_TEAM_ID" 2>&1)
           RC=$?
           set -e
           printf '%s\n' "$OUTPUT"
@@ -183,29 +214,29 @@ jobs:
             /tmp/post-status failure failure/deploy-no-url "Deployment completed without a Vercel URL"
             exit 1
           fi
-
           echo "DEPLOYMENT_URL=$DEPLOYMENT_URL" >> "$GITHUB_ENV"
           echo "- Production: $DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"
-          /tmp/post-status success automation/deploy "Production deployment created"
+          /tmp/post-status success automation/deploy "Production deployment created" "$DEPLOYMENT_URL"
 
       - name: Validate production health
         shell: bash
         run: |
           set -euo pipefail
-          for i in {1..30}; do
-            STATUS=$(curl -L -sS -o /tmp/health.json -w "%{http_code}" "$DEPLOYMENT_URL/api/health" || true)
-            if [ "$STATUS" = "200" ]; then
-              cat /tmp/health.json
-              /tmp/post-status success automation/health "Production health check passed"
-              /tmp/post-status success automation/pipeline "Production deploy and health check passed"
+          LAST_STATUS=000
+          for i in {1..8}; do
+            LAST_STATUS=$(curl -L -sS -o /tmp/health.json -w "%{http_code}" "$DEPLOYMENT_URL/api/health" || true)
+            if [ "$LAST_STATUS" = "200" ]; then
+              /tmp/post-status success automation/health "Production health check passed" "$DEPLOYMENT_URL/api/health"
+              /tmp/post-status success automation/pipeline "Production deploy and health check passed" "$DEPLOYMENT_URL"
               echo "- Health: passed" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            echo "Attempt $i: HTTP $STATUS"
-            sleep 10
+            sleep 5
           done
-          /tmp/post-status failure "failure/health-http-$STATUS" "Production health check failed"
-          cat /tmp/health.json 2>/dev/null || true
+
+          DB_STATE=$(node -e "const fs=require('fs'); try { const x=JSON.parse(fs.readFileSync('/tmp/health.json','utf8')); process.stdout.write(String(x.database||x.error||'unknown')); } catch { process.stdout.write('unknown'); }" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | cut -c1-35)
+          [ -n "$DB_STATE" ] || DB_STATE=unknown
+          /tmp/post-status failure "failure/health-$DB_STATE-http-$LAST_STATUS" "Production health check failed" "$DEPLOYMENT_URL/api/health"
           exit 1
 
       - name: Mark pipeline failure
