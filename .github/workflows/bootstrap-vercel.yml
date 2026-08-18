@@ -1,26 +1,27 @@
-name: Bootstrap Vercel production
+name: Provision and deploy to Vercel
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/bootstrap-vercel.yml'
 
 permissions:
   contents: read
 
+concurrency:
+  group: vercel-production-${{ github.repository }}
+  cancel-in-progress: true
+
 jobs:
-  bootstrap:
+  deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
       VERCEL_TEAM_SLUG: maquina-de-leads1
-      VERCEL_PROJECT_NAME: a-castilho-site
-      GITHUB_REPOSITORY_FULL: acastilho/a-castilho-site
+      VERCEL_PROJECT_NAME: ${{ github.event.repository.name }}
 
     steps:
       - name: Checkout
@@ -38,10 +39,13 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install deployment tooling
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Vercel tooling
         run: npm install --no-save @vercel/sdk@latest vercel@latest
 
-      - name: Create Vercel project, configure environment and deploy
+      - name: Create or reuse Vercel project and configure environment
         shell: bash
         run: |
           node --input-type=module <<'EOF'
@@ -52,7 +56,6 @@ jobs:
           const teamId = process.env.VERCEL_TEAM_ID;
           const slug = process.env.VERCEL_TEAM_SLUG;
           const name = process.env.VERCEL_PROJECT_NAME;
-          const [org, repo] = process.env.GITHUB_REPOSITORY_FULL.split('/');
 
           let project;
           try {
@@ -64,11 +67,7 @@ jobs:
               slug,
               requestBody: {
                 name,
-                framework: 'nextjs',
-                gitRepository: {
-                  repo: `${org}/${repo}`,
-                  type: 'github'
-                }
+                framework: 'nextjs'
               }
             });
             project = created.value ?? created;
@@ -91,54 +90,47 @@ jobs:
             ]
           });
 
-          const deploymentResult = await vercel.deployments.createDeployment({
-            teamId,
-            slug,
-            requestBody: {
-              name,
-              target: 'production',
-              gitSource: {
-                type: 'github',
-                repo,
-                ref: 'main',
-                org
-              }
-            }
-          });
-
-          const deployment = deploymentResult.value ?? deploymentResult;
-          const deploymentUrl = deployment.url ? `https://${deployment.url}` : '';
+          fs.mkdirSync('.vercel', { recursive: true });
+          fs.writeFileSync('.vercel/project.json', JSON.stringify({
+            projectId: project.id,
+            orgId: teamId
+          }));
 
           fs.appendFileSync(process.env.GITHUB_ENV, `VERCEL_PROJECT_ID=${project.id}\n`);
-          if (deploymentUrl) fs.appendFileSync(process.env.GITHUB_ENV, `DEPLOYMENT_URL=${deploymentUrl}\n`);
-
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            `## A Castilho — Vercel bootstrap\n\n` +
+            `## Vercel provisioning\n\n` +
             `- Project: **${name}**\n` +
             `- Project ID: \`${project.id}\`\n` +
-            `- Deployment: ${deploymentUrl || 'created; URL pending'}\n` +
-            `- Git repository: \`${org}/${repo}\`\n`
+            `- Repository: \`${process.env.GITHUB_REPOSITORY}\`\n`
           );
           EOF
 
-      - name: Wait for deployment and validate health endpoint
-        if: env.DEPLOYMENT_URL != ''
+      - name: Pull production configuration
+        run: npx vercel pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG"
+
+      - name: Build production artifact
+        run: npx vercel build --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG"
+
+      - name: Deploy production
         shell: bash
         run: |
+          DEPLOYMENT_URL=$(npx vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG")
+          echo "DEPLOYMENT_URL=$DEPLOYMENT_URL" >> "$GITHUB_ENV"
+          echo "- Production: $DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"
           echo "Deployment URL: $DEPLOYMENT_URL"
+
+      - name: Validate production health
+        shell: bash
+        run: |
           for i in {1..30}; do
             STATUS=$(curl -L -sS -o /tmp/health.json -w "%{http_code}" "$DEPLOYMENT_URL/api/health" || true)
             if [ "$STATUS" = "200" ]; then
               cat /tmp/health.json
-              echo "Health check passed."
-              echo "## Production health check ✅" >> "$GITHUB_STEP_SUMMARY"
-              echo "$DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"
+              echo "- Health: ✅" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             echo "Attempt $i: HTTP $STATUS"
             sleep 10
           done
-          echo "Deployment was created but health check did not become ready in time."
+          echo "Health check failed for $DEPLOYMENT_URL"
           exit 1
-
-# deploy-trigger: 2026-08-18T12:17-03:00
