@@ -35,7 +35,7 @@ jobs:
           if(!token) throw new Error('RENDER_API_KEY missing');
           const base='https://api.render.com/v1';
           async function status(state,context,description,target_url){
-            const body={state,context,description:description.slice(0,140)};
+            const body={state,context:context.slice(0,100),description:description.slice(0,140)};
             if(target_url) body.target_url=target_url;
             const r=await fetch(`https://api.github.com/repos/${ghRepo}/statuses/${sha}`,{method:'POST',headers:{Authorization:`Bearer ${ghToken}`,'Accept':'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
             if(!r.ok) throw new Error(`status:${r.status}`);
@@ -46,6 +46,7 @@ jobs:
             if(!r.ok){const e=new Error(typeof data==='string'?data:JSON.stringify(data)); e.code=r.status; throw e}
             return data;
           }
+          function slug(s){return String(s||'unknown').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,48)||'unknown'}
           await status('pending','render/provision','Provisioning Render services');
           const owners=await request('/owners?limit=100');
           const first=Array.isArray(owners)?owners[0]:owners?.data?.[0];
@@ -58,7 +59,7 @@ jobs:
             {name:'maquinadeleads-homolog-api',type:'web_service',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/backend',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'npm start'}}},
             {name:'maquinadeleads-homolog-web',type:'static_site',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/frontend',serviceDetails:{buildCommand:'npm ci && npm run build',publishPath:'dist'}},
             {name:'telaviva-homolog',type:'static_site',repo:'https://github.com/acastilho/telaviva',rootDir:'preview',serviceDetails:{buildCommand:'echo TelaViva static homologation preview',publishPath:'.'}},
-            {name:'devpilot-homolog',type:'web_service',repo:'https://github.com/a-castilho/devpilot',rootDir:'.',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'uvicorn app.main:app --host 0.0.0.0 --port $PORT'}}}
+            {name:'devpilot-homolog',type:'web_service',repo:'https://github.com/a-castilho/devpilot',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'uvicorn app.main:app --host 0.0.0.0 --port $PORT'}}}
           ];
           let failures=0;
           for(const spec of specs){
@@ -74,7 +75,8 @@ jobs:
             }catch(e){
               failures++;
               const code=e.code||'error';
-              await status('failure',`render/${spec.name}/http-${code}`,`${spec.name} failed (${code})`);
+              const reason=slug(e.message);
+              await status('failure',`render/${spec.name}/http-${code}/${reason}`,`${spec.name} failed (${code})`);
             }
           }
           if(failures===0){await status('success','render/provision','All Render services provisioned');}
