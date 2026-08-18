@@ -7,9 +7,7 @@ export const homologationProducts = [
     status: 'homologacao',
     statusLabel: 'Em homologação',
     updatedAt: '18/08/2026',
-    publicUrl:
-      process.env.NEXT_PUBLIC_REGULAAI_HOMOLOG_URL ||
-      'https://regulaai.onrender.com',
+    publicUrl: 'https://regulaai-lac.vercel.app/',
     visibleToClients: true,
     highlights: ['Inteligência regulatória', 'IA aplicada', 'Monitoramento contínuo']
   }
