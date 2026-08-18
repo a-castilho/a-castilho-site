@@ -1,0 +1,371 @@
+/* Guided project diagnostic — isolated visual layer */
+.diagnosticStart,
+.diagnosticShell {
+  width: 100%;
+}
+
+.diagnosticStart {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  padding: 8px 0;
+}
+
+.diagnosticStartMark {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(56, 242, 139, 0.32);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(56, 242, 139, 0.12), rgba(56, 242, 139, 0.03));
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  box-shadow: inset 0 0 26px rgba(56, 242, 139, 0.05);
+}
+
+.diagnosticStart h3,
+.diagnosticQuestion h3 {
+  margin: 0;
+  color: var(--text);
+  letter-spacing: -0.035em;
+}
+
+.diagnosticStart h3 {
+  max-width: 520px;
+  font-size: clamp(30px, 4vw, 44px);
+  line-height: 1.08;
+}
+
+.diagnosticStart > p,
+.diagnosticQuestion > p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.72;
+}
+
+.diagnosticPrimary {
+  justify-self: start;
+  border: 0;
+  cursor: pointer;
+}
+
+.diagnosticSkip {
+  justify-self: start;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.diagnosticSkip:hover,
+.diagnosticSkip:focus-visible {
+  color: var(--text);
+}
+
+.diagnosticShell {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.diagnosticTopbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.diagnosticBack {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #b7c8c1;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.diagnosticBack:hover,
+.diagnosticBack:focus-visible {
+  border-color: rgba(56, 242, 139, 0.42);
+  background: rgba(56, 242, 139, 0.055);
+  color: var(--text);
+  outline: none;
+  transform: translateX(-1px);
+}
+
+.diagnosticProgressCopy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #6f837b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.diagnosticProgressCopy strong {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.diagnosticProgress {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.diagnosticProgress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--green2), var(--green));
+  box-shadow: 0 0 18px rgba(56, 242, 139, 0.18);
+  transition: width 0.3s ease;
+}
+
+.diagnosticDots {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 11px 0 28px;
+}
+
+.diagnosticDots i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #20322c;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.diagnosticDots i.active {
+  background: var(--green);
+  transform: scale(1.08);
+  box-shadow: 0 0 10px rgba(56, 242, 139, 0.18);
+}
+
+.diagnosticQuestion {
+  display: grid;
+  min-width: 0;
+}
+
+.diagnosticQuestion .kicker {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.diagnosticQuestion h3 {
+  max-width: 620px;
+  font-size: clamp(24px, 3vw, 34px);
+  line-height: 1.16;
+}
+
+.diagnosticQuestion > p {
+  max-width: 610px;
+  margin-top: 14px;
+  font-size: 14px;
+}
+
+.diagnosticOptions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.diagnosticOption {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+  min-height: 112px;
+  padding: 17px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(16, 32, 26, 0.92), rgba(8, 20, 16, 0.94));
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.12);
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.diagnosticOption:hover,
+.diagnosticOption:focus-visible {
+  border-color: rgba(56, 242, 139, 0.52);
+  background: linear-gradient(145deg, rgba(18, 40, 31, 0.98), rgba(9, 24, 18, 0.98));
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.2), 0 0 28px rgba(56, 242, 139, 0.055);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.diagnosticOption:active {
+  transform: translateY(0);
+}
+
+.diagnosticOption > span:nth-child(2) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.diagnosticOption strong {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.diagnosticOption small {
+  display: block;
+  color: #859991;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.diagnosticOption > b {
+  justify-self: end;
+  color: #4d675e;
+  font-size: 15px;
+  font-weight: 500;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.diagnosticOption:hover > b,
+.diagnosticOption:focus-visible > b {
+  color: var(--green);
+  transform: translateX(2px);
+}
+
+.diagnosticIcon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  border: 1px solid rgba(56, 242, 139, 0.18);
+  border-radius: 13px;
+  background: rgba(56, 242, 139, 0.07);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.diagnosticForm {
+  min-width: 0;
+}
+
+.diagnosticForm .finalQuestion {
+  margin-bottom: 12px;
+}
+
+.diagnosticForm select {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: #07100e;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 14px 15px;
+  font: inherit;
+  outline: none;
+}
+
+.diagnosticForm select:focus {
+  border-color: rgba(56, 242, 139, 0.65);
+  box-shadow: 0 0 0 3px rgba(56, 242, 139, 0.08);
+}
+
+.diagnosticSubmit {
+  margin-top: 4px;
+}
+
+.privacyNote {
+  margin: 0;
+  color: #6f837b;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@media (max-width: 1100px) {
+  .diagnosticOptions {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnosticOption {
+    min-height: 98px;
+  }
+}
+
+@media (max-width: 900px) {
+  .diagnosticOptions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .diagnosticTopbar {
+    align-items: flex-start;
+  }
+
+  .diagnosticProgressCopy {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+
+  .diagnosticDots {
+    margin-bottom: 24px;
+  }
+
+  .diagnosticQuestion h3 {
+    font-size: 25px;
+  }
+
+  .diagnosticQuestion > p {
+    font-size: 13px;
+  }
+
+  .diagnosticOptions {
+    grid-template-columns: 1fr;
+    margin-top: 22px;
+  }
+
+  .diagnosticOption {
+    grid-template-columns: 44px minmax(0, 1fr) 16px;
+    min-height: 94px;
+    padding: 15px;
+    border-radius: 14px;
+  }
+
+  .diagnosticIcon {
+    width: 44px;
+    height: 44px;
+  }
+}
