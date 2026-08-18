@@ -1,4 +1,4 @@
-import { neon } from '@neondatabase/serverless';
+import { getDatabaseClient } from '../../../lib/database';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -47,11 +47,11 @@ export async function POST(request) {
       return json({ ok: false, error: 'Informe um e-mail válido.' }, { status: 400 });
     }
 
-    if (!process.env.DATABASE_URL) {
-      return json({ ok: false, error: 'Formulário ainda não configurado no ambiente.' }, { status: 503 });
+    const sql = getDatabaseClient();
+    if (!sql) {
+      return json({ ok: false, error: 'Banco de dados ainda não configurado no ambiente.' }, { status: 503 });
     }
 
-    const sql = neon(process.env.DATABASE_URL);
     await sql`
       insert into contact_leads (name, email, company, project_type, message, source)
       values (${name}, ${email}, ${company}, ${projectType}, ${message}, 'website')
