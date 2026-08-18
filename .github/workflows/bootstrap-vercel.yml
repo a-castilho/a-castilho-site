@@ -140,3 +140,5 @@ jobs:
           done
           echo "Deployment was created but health check did not become ready in time."
           exit 1
+
+# deploy-trigger: 2026-08-18T12:17-03:00
