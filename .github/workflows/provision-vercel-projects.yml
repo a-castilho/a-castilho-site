@@ -28,6 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "Starting Vercel provisioning"
           cat > /tmp/vercel.mjs <<'NODE'
           import {execFileSync} from 'node:child_process';
           import fs from 'node:fs';
