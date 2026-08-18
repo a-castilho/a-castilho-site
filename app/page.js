@@ -34,7 +34,7 @@ const faqs = [
 
 export default function Home() {
   return (
-    <main>
+    <main className="siteHome">
       <header className="nav wrap">
         <a className="brand" href="#inicio" aria-label="A Castilho — início">
           <span className="brandMark">AC</span>
@@ -45,9 +45,10 @@ export default function Home() {
           <a href="#processo">Processo</a>
           <a href="#impacto">Impacto</a>
           <a href="#sobre">Sobre</a>
+          <a href="#contato">Orçamento</a>
           <a href="/homologacao">Produtos em homologação</a>
         </nav>
-        <a className="button small" href="#contato">Falar com especialista</a>
+        <a className="button small" href="#contato">Fazer diagnóstico</a>
       </header>
 
       <section id="inicio" className="hero wrap">
@@ -151,9 +152,9 @@ export default function Home() {
         <div className="ctaGrid">
           <div>
             <span className="kicker">VAMOS CONSTRUIR?</span>
-            <h2>Tem um desafio que merece uma solução melhor?</h2>
-            <p>Conte o contexto. A gente ajuda a transformar o problema em uma direção técnica clara e um próximo passo executável.</p>
-            <div className="contactBullets"><span>✓ Conversa objetiva</span><span>✓ Sem compromisso</span><span>✓ Foco no seu contexto</span></div>
+            <h2>Deixe a gente entender o que você precisa.</h2>
+            <p>Um diagnóstico rápido organiza o contexto do projeto e ajuda nossa equipe a chegar na conversa já entendendo objetivo, estágio, integrações e prioridade.</p>
+            <div className="contactBullets"><span>✓ Menos de 2 minutos</span><span>✓ Sem compromisso</span><span>✓ Foco no seu contexto</span></div>
           </div>
           <ContactForm />
         </div>
