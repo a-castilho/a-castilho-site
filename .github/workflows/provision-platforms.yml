@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: provision-a-castilho-platforms
@@ -18,8 +19,9 @@ concurrency:
 jobs:
   provision:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
+      GH_TOKEN: ${{ github.token }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
       NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
@@ -32,6 +34,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Prepare status reporter
+        shell: bash
+        run: |
+          cat > /tmp/post-status <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          state="$1"; context="$2"; description="$3"; target="${4:-}"
+          payload=$(node -e 'const x={state:process.argv[1],context:process.argv[2],description:process.argv[3]}; if(process.argv[4]) x.target_url=process.argv[4]; process.stdout.write(JSON.stringify(x))' "$state" "$context" "$description" "$target")
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$payload" >/dev/null
+          EOF
+          chmod +x /tmp/post-status
+          /tmp/post-status pending automation/platforms "Provisioning platforms"
 
       - name: Validate catalog
         run: node -e "const x=require('./infra/projects.json'); if(!Array.isArray(x.projects)||!x.projects.length) process.exit(1)"
@@ -59,11 +78,16 @@ jobs:
             then
               echo "Neon: reuse $name"
             else
-              echo "Neon: create $name"
               neon projects create --name "$name" --org-id "$NEON_ORG_ID" --database neondb --role neondb_owner --output json >/tmp/neon-created.json
               neon projects list --org-id "$NEON_ORG_ID" --output json > /tmp/neon-projects.json
+              echo "Neon: created $name"
             fi
           done < /tmp/neon-required.txt
+          /tmp/post-status success automation/neon "Neon projects ready"
+
+      - name: Neon managed externally status
+        if: ${{ env.NEON_API_KEY == '' || env.NEON_ORG_ID == '' }}
+        run: /tmp/post-status success automation/neon "Neon projects managed through connected Neon account"
 
       - name: Ensure Vercel projects
         if: ${{ env.VERCEL_TOKEN != '' }}
@@ -72,9 +96,7 @@ jobs:
           set -euo pipefail
           node <<'NODE' > /tmp/vercel-projects.ndjson
           const {projects}=require('./infra/projects.json');
-          for (const p of projects.filter(x=>x.vercel?.enabled)) {
-            console.log(JSON.stringify({name:p.name,repo:p.repo,rootDirectory:p.vercel.rootDirectory||undefined}));
-          }
+          for (const p of projects.filter(x=>x.vercel?.enabled)) console.log(JSON.stringify({name:p.name,repo:p.repo,rootDirectory:p.vercel.rootDirectory||undefined}));
           NODE
           while IFS= read -r row; do
             [ -n "$row" ] || continue
@@ -97,91 +119,76 @@ jobs:
               --data "$payload" \
               "https://api.vercel.com/v11/projects?teamId=$VERCEL_TEAM_ID")
             if [ "$code" != "200" ] && [ "$code" != "201" ]; then
-              echo "Vercel create failed for $name (HTTP $code)"
               cat /tmp/vercel-project.json
+              /tmp/post-status failure automation/vercel "Vercel project provisioning failed"
               exit 1
             fi
             echo "Vercel: created $name"
           done < /tmp/vercel-projects.ndjson
+          /tmp/post-status success automation/vercel "Vercel projects ready"
 
-      - name: Provision Render services
+      - name: Ensure Render services via REST API
         if: ${{ env.RENDER_API_KEY != '' }}
         shell: bash
         run: |
           set -euo pipefail
-
-          curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
-            'https://api.render.com/v1/services?name=regulaai&limit=20' > /tmp/render-regulaai.json
-
-          RENDER_OWNER_ID=$(node <<'NODE'
-          const fs=require('fs');
-          const x=JSON.parse(fs.readFileSync('/tmp/render-regulaai.json','utf8'));
-          const rows=Array.isArray(x)?x:(x.services||x.data||[]);
-          const row=rows[0];
-          process.stdout.write(row?.ownerId || row?.owner_id || row?.service?.ownerId || row?.service?.owner_id || '');
-          NODE
-          )
-
-          if [ -z "$RENDER_OWNER_ID" ]; then
-            curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
-              'https://api.render.com/v1/owners?limit=100' > /tmp/render-owners.json
-            RENDER_OWNER_ID=$(node <<'NODE'
-          const fs=require('fs');
-          const x=JSON.parse(fs.readFileSync('/tmp/render-owners.json','utf8'));
-          const rows=Array.isArray(x)?x:(x.owners||x.data||[]);
-          const row=rows[0];
-          process.stdout.write(row?.id || row?.owner?.id || '');
-          NODE
-            )
-          fi
-
-          test -n "$RENDER_OWNER_ID" || { echo 'Could not resolve Render workspace'; exit 1; }
-          echo "Render workspace resolved automatically"
-
-          curl -fsSL https://raw.githubusercontent.com/render-oss/cli/main/bin/install.sh | sh >/dev/null
-          export PATH="$HOME/.render/bin:$PATH"
-          export RENDER_OUTPUT=json
-          render workspace set "$RENDER_OWNER_ID" >/dev/null
-          render services -o json > /tmp/render-services.json
-
-          exists() {
-            node - "$1" <<'NODE'
-          const fs=require('fs');
-          const name=process.argv[2];
-          const x=JSON.parse(fs.readFileSync('/tmp/render-services.json','utf8'));
-          const rows=Array.isArray(x)?x:(x.services||x.data||[]);
-          process.exit(rows.some(r=>(r.service?.name||r.name)===name)?0:1);
-          NODE
+          cat > /tmp/provision-render.mjs <<'NODE'
+          const token = process.env.RENDER_API_KEY;
+          const ghToken = process.env.GH_TOKEN;
+          const repo = process.env.GITHUB_REPOSITORY;
+          const sha = process.env.GITHUB_SHA;
+          const api = 'https://api.render.com/v1';
+          const headers = {Authorization:`Bearer ${token}`,'Content-Type':'application/json'};
+          async function req(path, init={}) {
+            const r = await fetch(api+path,{...init,headers:{...headers,...(init.headers||{})}});
+            const text = await r.text();
+            let data=null; try{data=text?JSON.parse(text):null}catch{data=text}
+            if(!r.ok){throw new Error(`${init.method||'GET'} ${path} -> ${r.status}: ${typeof data==='string'?data:JSON.stringify(data)}`)}
+            return data;
           }
-
-          create_service() {
-            local name="$1" type="$2" repo="$3" runtime="$4" root="$5" build="${6:-}" publish="${7:-}" health="${8:-}" start="${9:-}"
-            if exists "$name"; then echo "Render: reuse $name"; return; fi
-            args=(services create --confirm -o json --name "$name" --type "$type" --repo "https://github.com/$repo" --branch main --auto-deploy --runtime "$runtime" --root-directory "$root")
-            [ -z "$build" ] || args+=(--build-command "$build")
-            [ -z "$publish" ] || args+=(--publish-directory "$publish")
-            [ -z "$health" ] || args+=(--health-check-path "$health")
-            [ -z "$start" ] || args+=(--start-command "$start")
-            [ "$type" != "web_service" ] || args+=(--plan free)
-            render "${args[@]}" >/tmp/render-created.json
-            echo "Render: created $name"
-            render services -o json > /tmp/render-services.json
+          async function status(state, context, description, target_url) {
+            const body={state,context,description}; if(target_url) body.target_url=target_url;
+            const r=await fetch(`https://api.github.com/repos/${repo}/statuses/${sha}`,{method:'POST',headers:{Authorization:`Bearer ${ghToken}`,'Accept':'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(!r.ok) throw new Error(`GitHub status ${context} failed: ${r.status}`);
           }
+          const owners=await req('/owners?limit=100');
+          const ownerRow=Array.isArray(owners)?owners[0]:owners?.data?.[0];
+          const ownerId=ownerRow?.owner?.id||ownerRow?.id;
+          if(!ownerId) throw new Error('Render workspace could not be resolved');
+          const list=await req('/services?limit=100');
+          const rows=Array.isArray(list)?list:(list?.data||list?.services||[]);
+          const services=new Map(rows.map(x=>{const s=x.service||x; return [s.name,s]}));
+          const specs=[
+            {name:'devpilot-homolog',type:'web_service',repo:'https://github.com/a-castilho/devpilot',rootDir:'.',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'uvicorn app.main:app --host 0.0.0.0 --port $PORT'}}},
+            {name:'maquinadeleads-homolog-api',type:'web_service',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/backend',serviceDetails:{runtime:'docker',plan:'free',healthCheckPath:'/health',envSpecificDetails:{dockerfilePath:'./Dockerfile',dockerCommand:'npm start'}}},
+            {name:'maquinadeleads-homolog-web',type:'static_site',repo:'https://github.com/a-castilho/maquinadeleads',rootDir:'maquina-de-leads/frontend',serviceDetails:{buildCommand:'npm ci && npm run build',publishPath:'dist'}},
+            {name:'telaviva-homolog',type:'static_site',repo:'https://github.com/acastilho/telaviva',rootDir:'preview',serviceDetails:{buildCommand:'echo TelaViva static homologation preview',publishPath:'.'}}
+          ];
+          for(const spec of specs){
+            let s=services.get(spec.name);
+            if(!s){
+              await status('pending',`render/${spec.name}`,`Creating ${spec.name}`);
+              s=await req('/services',{method:'POST',body:JSON.stringify({...spec,ownerId,branch:'main',autoDeploy:'yes'})});
+              s=s?.service||s;
+            }
+            const target=s?.url || (s?.id ? `https://dashboard.render.com/web/${s.id}` : undefined);
+            await status('success',`render/${spec.name}`,`${spec.name} provisioned`,target);
+            console.log(`${spec.name}: ${target||s?.id||'created'}`);
+          }
+          await status('success','automation/render','Render services provisioned');
+          NODE
+          node /tmp/provision-render.mjs
 
-          create_service devpilot-homolog web_service a-castilho/devpilot docker . '' '' /health 'uvicorn app.main:app --host 0.0.0.0 --port $PORT'
-          create_service maquinadeleads-homolog-api web_service a-castilho/maquinadeleads docker maquina-de-leads/backend '' '' /health 'npm start'
-          create_service maquinadeleads-homolog-web static_site a-castilho/maquinadeleads static maquina-de-leads/frontend 'npm ci && npm run build' dist
-          create_service telaviva-homolog static_site acastilho/telaviva static preview 'echo TelaViva static homologation preview' .
-
-      - name: Render credential status
+      - name: Missing Render credential
         if: ${{ env.RENDER_API_KEY == '' }}
         run: |
-          echo '### Render pending one-time authorization' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Add RENDER_API_KEY as a repository secret. The workflow discovers the correct workspace automatically and provisions all missing Render services.' >> "$GITHUB_STEP_SUMMARY"
+          /tmp/post-status failure automation/render "RENDER_API_KEY missing"
+          exit 1
 
-      - name: Summary
-        run: |
-          echo '### Platform provisioner completed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Neon: idempotent project provisioning enabled' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Vercel: idempotent project provisioning enabled' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Render: idempotent service provisioning enabled when RENDER_API_KEY is available' >> "$GITHUB_STEP_SUMMARY"
+      - name: Final status
+        if: ${{ success() }}
+        run: /tmp/post-status success automation/platforms "Platform provisioning completed"
+
+      - name: Failure status
+        if: ${{ failure() }}
+        run: /tmp/post-status failure automation/platforms "Platform provisioning failed"
