@@ -2,6 +2,10 @@ name: Bootstrap Vercel production
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap-vercel.yml'
 
 permissions:
   contents: read
@@ -50,21 +54,27 @@ jobs:
           const name = process.env.VERCEL_PROJECT_NAME;
           const [org, repo] = process.env.GITHUB_REPOSITORY_FULL.split('/');
 
-          const created = await vercel.projects.createProject({
-            teamId,
-            slug,
-            requestBody: {
-              name,
-              framework: 'nextjs',
-              gitRepository: {
-                repo: `${org}/${repo}`,
-                type: 'github'
+          let project;
+          try {
+            const existing = await vercel.projects.getProject({ teamId, slug, idOrName: name });
+            project = existing.value ?? existing;
+          } catch {
+            const created = await vercel.projects.createProject({
+              teamId,
+              slug,
+              requestBody: {
+                name,
+                framework: 'nextjs',
+                gitRepository: {
+                  repo: `${org}/${repo}`,
+                  type: 'github'
+                }
               }
-            }
-          });
+            });
+            project = created.value ?? created;
+          }
 
-          const project = created.value ?? created;
-          if (!project?.id) throw new Error('Vercel project was created without a project id.');
+          if (!project?.id) throw new Error('Vercel project unavailable or missing project id.');
 
           await vercel.projects.createProjectEnv({
             teamId,
