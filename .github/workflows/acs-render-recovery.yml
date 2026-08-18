@@ -1,0 +1,120 @@
+name: ACS Render recovery
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/acs-render-recovery.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: acs-render-recovery
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      NEON_PROJECT_ID: falling-unit-68011930
+      SITE_URL: https://acastilho.com.br
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve Neon connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$NEON_API_KEY"
+          test -n "$RENDER_API_KEY"
+          node <<'NODE'
+          import fs from 'node:fs';
+          const q=new URLSearchParams({database_name:'neondb',role_name:'neondb_owner',pooled:'true'});
+          const r=await fetch(`https://console.neon.tech/api/v2/projects/${process.env.NEON_PROJECT_ID}/connection_uri?${q}`,{headers:{Authorization:`Bearer ${process.env.NEON_API_KEY}`,Accept:'application/json'}});
+          const data=await r.json().catch(()=>({}));
+          if(!r.ok||!data.uri) throw new Error(`Neon ${r.status}`);
+          console.log(`::add-mask::${data.uri}`);
+          fs.appendFileSync(process.env.GITHUB_ENV,`ACS_DATABASE_URL=${data.uri}\n`);
+          NODE
+
+      - name: Verify Neon data
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save @neondatabase/serverless@^1.0.2 >/dev/null
+          node <<'NODE'
+          const {neon}=require('@neondatabase/serverless');
+          const sql=neon(process.env.ACS_DATABASE_URL);
+          const rows=await sql`select to_regclass('public.contact_leads')::text as table_name, count(*)::int as total_leads from public.contact_leads`;
+          if(!rows[0]?.table_name) throw new Error('contact_leads missing');
+          console.log(`contact_leads rows=${rows[0].total_leads}`);
+          NODE
+
+      - name: Ensure and deploy ACS on Render
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/render.mjs <<'NODE'
+          const api='https://api.render.com/v1', token=process.env.RENDER_API_KEY;
+          async function req(path,init={}){
+            const r=await fetch(api+path,{...init,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(init.headers||{})}});
+            const text=await r.text();let data={};try{data=text?JSON.parse(text):{}}catch{data={message:text}}
+            if(!r.ok) throw new Error(`Render ${r.status}: ${data.message||JSON.stringify(data)}`);
+            return data;
+          }
+          async function status(state,context,description,target){
+            const body={state,context,description:description.slice(0,140)};if(target)body.target_url=target;
+            const r=await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/statuses/${process.env.GITHUB_SHA}`,{method:'POST',headers:{Authorization:`Bearer ${process.env.GH_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(!r.ok) throw new Error(`GitHub status ${r.status}`);
+          }
+          await status('pending','acs/render','Provisioning ACS on Render');
+          const owners=await req('/owners?limit=100');
+          const ownerRow=Array.isArray(owners)?owners[0]:owners?.data?.[0];
+          const ownerId=ownerRow?.owner?.id||ownerRow?.id;
+          if(!ownerId) throw new Error('Render workspace missing');
+          const listed=await req('/services?limit=100');
+          const rows=Array.isArray(listed)?listed:(listed?.data||listed?.services||[]);
+          let service=rows.map(x=>x.service||x).find(x=>x?.name==='acs');
+          let isNew=false;
+          if(!service){
+            const created=await req('/services',{method:'POST',body:JSON.stringify({
+              type:'web_service',name:'acs',ownerId,repo:'https://github.com/a-castilho/a-castilho-site',branch:'main',autoDeploy:'no',
+              envVars:[{key:'DATABASE_URL',value:process.env.ACS_DATABASE_URL},{key:'NEXT_PUBLIC_SITE_URL',value:process.env.SITE_URL}],
+              serviceDetails:{runtime:'node',plan:'free',healthCheckPath:'/',envSpecificDetails:{buildCommand:'npm install && npm run build',startCommand:'npm start'}}
+            })});
+            service=created?.service||created;isNew=true;
+          }else{
+            await req(`/services/${service.id}/env-vars/DATABASE_URL`,{method:'PUT',body:JSON.stringify({value:process.env.ACS_DATABASE_URL})});
+            await req(`/services/${service.id}/env-vars/NEXT_PUBLIC_SITE_URL`,{method:'PUT',body:JSON.stringify({value:process.env.SITE_URL})});
+            await req(`/services/${service.id}/deploys`,{method:'POST',body:JSON.stringify({clearCache:'do_not_clear'})});
+          }
+          if(!service?.id) throw new Error('Render service id missing');
+          let detail=await req(`/services/${service.id}`);detail=detail?.service||detail;
+          const url=detail?.url||detail?.serviceDetails?.url||'https://acs.onrender.com';
+          let ok=false,code=0;
+          for(let i=0;i<24;i++){
+            try{const r=await fetch(url,{redirect:'follow'});code=r.status;if(r.ok){ok=true;break}}catch{}
+            await new Promise(r=>setTimeout(r,10000));
+          }
+          if(!ok){await status('failure','acs/render',`ACS Render HTTP ${code||'unreachable'}`,url);throw new Error('Render not live')}
+          const apiCheck=await fetch(`${url.replace(/\/$/,'')}/api/contact`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({website:'validation-bot'})});
+          if(!apiCheck.ok) throw new Error(`API smoke ${apiCheck.status}`);
+          const body=await apiCheck.json();if(body?.ok!==true)throw new Error('API smoke body invalid');
+          await status('success','acs/neon','ACS Neon database verified and preserved');
+          await status('success','acs/render',isNew?'ACS created and live on Render':'ACS redeployed and live on Render',url);
+          await status('success','acs/recovery','ACS Neon and Render ready',url);
+          console.log(`ACS_RENDER_URL=${url}`);
+          NODE
+          node /tmp/render.mjs
