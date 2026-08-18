@@ -1,0 +1,159 @@
+name: Provision A Castilho platforms
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/projects.json'
+      - '.github/workflows/provision-platforms.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provision-a-castilho-platforms
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_ORG_ID: ${{ vars.NEON_ORG_ID }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate catalog
+        run: node -e "const x=require('./infra/projects.json'); if(!Array.isArray(x.projects)||!x.projects.length) process.exit(1)"
+
+      - name: Ensure Neon projects
+        if: ${{ env.NEON_API_KEY != '' && env.NEON_ORG_ID != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g neon@latest >/dev/null
+          neon projects list --org-id "$NEON_ORG_ID" --output json > /tmp/neon-projects.json
+          node <<'NODE' > /tmp/neon-required.txt
+          const {projects}=require('./infra/projects.json');
+          for (const p of projects.filter(x=>x.neon)) console.log(p.name);
+          NODE
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            if node - "$name" <<'NODE'
+          const fs=require('fs');
+          const name=process.argv[2];
+          const x=JSON.parse(fs.readFileSync('/tmp/neon-projects.json','utf8'));
+          const rows=Array.isArray(x)?x:(x.projects||x.data||[]);
+          process.exit(rows.some(p=>p?.name===name)?0:1);
+          NODE
+            then
+              echo "Neon: reuse $name"
+            else
+              echo "Neon: create $name"
+              neon projects create --name "$name" --org-id "$NEON_ORG_ID" --database neondb --role neondb_owner --output json >/tmp/neon-created.json
+              neon projects list --org-id "$NEON_ORG_ID" --output json > /tmp/neon-projects.json
+            fi
+          done < /tmp/neon-required.txt
+
+      - name: Ensure Vercel projects
+        if: ${{ env.VERCEL_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE' > /tmp/vercel-projects.ndjson
+          const {projects}=require('./infra/projects.json');
+          for (const p of projects.filter(x=>x.vercel?.enabled)) {
+            console.log(JSON.stringify({name:p.name,repo:p.repo,rootDirectory:p.vercel.rootDirectory||undefined}));
+          }
+          NODE
+          while IFS= read -r row; do
+            [ -n "$row" ] || continue
+            name=$(node -e "const x=JSON.parse(process.argv[1]);process.stdout.write(x.name)" "$row")
+            code=$(curl -sS -o /tmp/vercel-project.json -w '%{http_code}' -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects/$name?teamId=$VERCEL_TEAM_ID")
+            if [ "$code" = "200" ]; then
+              echo "Vercel: reuse $name"
+              continue
+            fi
+            payload=$(node - "$row" <<'NODE'
+          const x=JSON.parse(process.argv[2]);
+          const body={name:x.name,gitRepository:{type:'github',repo:x.repo}};
+          if(x.rootDirectory) body.rootDirectory=x.rootDirectory;
+          process.stdout.write(JSON.stringify(body));
+          NODE
+            )
+            code=$(curl -sS -o /tmp/vercel-project.json -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H 'Content-Type: application/json' \
+              --data "$payload" \
+              "https://api.vercel.com/v11/projects?teamId=$VERCEL_TEAM_ID")
+            if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+              echo "Vercel create failed for $name (HTTP $code)"
+              cat /tmp/vercel-project.json
+              exit 1
+            fi
+            echo "Vercel: created $name"
+          done < /tmp/vercel-projects.ndjson
+
+      - name: Provision Render services
+        if: ${{ env.RENDER_API_KEY != '' && env.RENDER_OWNER_ID != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/render-oss/cli/main/bin/install.sh | sh >/dev/null
+          export PATH="$HOME/.render/bin:$PATH"
+          export RENDER_OUTPUT=json
+          render workspace set "$RENDER_OWNER_ID" >/dev/null
+          render services -o json > /tmp/render-services.json
+
+          exists() {
+            node - "$1" <<'NODE'
+          const fs=require('fs');
+          const name=process.argv[2];
+          const x=JSON.parse(fs.readFileSync('/tmp/render-services.json','utf8'));
+          const rows=Array.isArray(x)?x:(x.services||x.data||[]);
+          process.exit(rows.some(r=>(r.service?.name||r.name)===name)?0:1);
+          NODE
+          }
+
+          create_service() {
+            local name="$1" type="$2" repo="$3" runtime="$4" root="$5" build="${6:-}" publish="${7:-}" health="${8:-}" start="${9:-}"
+            if exists "$name"; then echo "Render: reuse $name"; return; fi
+            args=(services create --confirm -o json --name "$name" --type "$type" --repo "https://github.com/$repo" --branch main --auto-deploy --runtime "$runtime" --root-directory "$root")
+            [ -z "$build" ] || args+=(--build-command "$build")
+            [ -z "$publish" ] || args+=(--publish-directory "$publish")
+            [ -z "$health" ] || args+=(--health-check-path "$health")
+            [ -z "$start" ] || args+=(--start-command "$start")
+            [ "$type" != "web_service" ] || args+=(--plan free)
+            render "${args[@]}" >/tmp/render-created.json
+            echo "Render: created $name"
+            render services -o json > /tmp/render-services.json
+          }
+
+          create_service devpilot-homolog web_service a-castilho/devpilot docker . '' '' /health 'uvicorn app.main:app --host 0.0.0.0 --port $PORT'
+          create_service maquinadeleads-homolog-api web_service a-castilho/maquinadeleads docker maquina-de-leads/backend '' '' /health 'npm start'
+          create_service maquinadeleads-homolog-web static_site a-castilho/maquinadeleads static maquina-de-leads/frontend 'npm ci && npm run build' dist
+          create_service telaviva-homolog static_site acastilho/telaviva static preview 'echo TelaViva static homologation preview' .
+
+      - name: Render credential status
+        if: ${{ env.RENDER_API_KEY == '' || env.RENDER_OWNER_ID == '' }}
+        run: |
+          echo '### Render pending one-time authorization' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Add RENDER_API_KEY as a repository secret and RENDER_OWNER_ID as a repository variable. The next run provisions all missing Render services automatically.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        run: |
+          echo '### Platform provisioner completed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Neon: idempotent project provisioning enabled' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Vercel: idempotent project provisioning enabled' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Render: idempotent service provisioning enabled when credentials are available' >> "$GITHUB_STEP_SUMMARY"
