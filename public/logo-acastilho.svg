@@ -1,23 +1,45 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-  <title id="title">A Castilho</title>
-  <desc id="desc">Letra A geométrica em verde neon dentro de um círculo orbital.</desc>
+  <title id="title">ACS</title>
+  <desc id="desc">Letra A geométrica em verde neon, centralizada, com as três pontas tocando o círculo orbital.</desc>
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#52ffad"/>
-      <stop offset="1" stop-color="#14d777"/>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7affc5"/>
+      <stop offset="0.48" stop-color="#19f889"/>
+      <stop offset="1" stop-color="#0ed46f"/>
     </linearGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="5" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    <linearGradient id="face" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#6dffc0"/>
+      <stop offset="0.45" stop-color="#20f68b"/>
+      <stop offset="1" stop-color="#0fcf6d"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#abffe0"/>
+      <stop offset="1" stop-color="#21ef8b"/>
+    </linearGradient>
+    <filter id="glow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
     </filter>
   </defs>
-  <g fill="none" stroke="url(#g)" stroke-width="8" stroke-linecap="round" filter="url(#glow)">
-    <path d="M139 403A198 198 0 0 1 394 111"/>
-    <path d="M419 140A198 198 0 0 1 158 427"/>
+
+  <circle cx="256" cy="256" r="200" fill="none" stroke="url(#ring)" stroke-width="9" filter="url(#glow)"/>
+
+  <!-- A centralizado. As três extremidades coincidem com o círculo: topo (256,56), base esquerda (109,392), base direita (403,392). -->
+  <g filter="url(#glow)">
+    <path d="M256 56 L109 392 L166 392 L278 123 Z" fill="url(#face)" stroke="url(#edge)" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M256 56 L403 392 L346 392 L234 123 Z" fill="url(#face)" stroke="url(#edge)" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M218 318 H294 L319 366 H193 Z" fill="url(#face)" stroke="url(#edge)" stroke-width="2.5" stroke-linejoin="round"/>
   </g>
-  <circle cx="411" cy="124" r="17" fill="url(#g)" filter="url(#glow)"/>
-  <g fill="url(#g)" filter="url(#glow)">
-    <path d="M256 126 135 380h54l67-151 67 151h54L256 126z"/>
-    <path d="M230 323h52l18 41h-88l18-41z"/>
-  </g>
+
+  <circle cx="385" cy="103" r="19" fill="url(#ring)" stroke="#9affe0" stroke-width="2.5" filter="url(#softGlow)"/>
 </svg>
