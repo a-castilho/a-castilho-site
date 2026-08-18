@@ -41,68 +41,94 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install Vercel tooling
-        run: npm install --no-save @vercel/sdk@latest vercel@latest
+      - name: Validate application build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SITE_URL: https://acastilho.com.br
 
-      - name: Create or reuse Vercel project and configure environment
+      - name: Install Vercel CLI
+        run: npm install --no-save vercel@latest
+
+      - name: Create or reuse Vercel project
         shell: bash
         run: |
-          node --input-type=module <<'EOF'
-          import { Vercel } from '@vercel/sdk';
-          import fs from 'node:fs';
+          set -euo pipefail
 
-          const vercel = new Vercel({ bearerToken: process.env.VERCEL_TOKEN });
-          const teamId = process.env.VERCEL_TEAM_ID;
-          const slug = process.env.VERCEL_TEAM_SLUG;
-          const name = process.env.VERCEL_PROJECT_NAME;
+          PROJECT_RESPONSE=$(mktemp)
+          HTTP_CODE=$(curl -sS -o "$PROJECT_RESPONSE" -w "%{http_code}" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_NAME?teamId=$VERCEL_TEAM_ID")
 
-          let project;
-          try {
-            const existing = await vercel.projects.getProject({ teamId, slug, idOrName: name });
-            project = existing.value ?? existing;
-          } catch {
-            const created = await vercel.projects.createProject({
-              teamId,
-              slug,
-              requestBody: {
-                name,
-                framework: 'nextjs'
-              }
-            });
-            project = created.value ?? created;
-          }
-
-          if (!project?.id) throw new Error('Vercel project unavailable or missing project id.');
-
-          await vercel.projects.createProjectEnv({
-            teamId,
-            slug,
-            idOrName: project.id,
-            upsert: 'true',
-            requestBody: [
-              {
-                key: 'DATABASE_URL',
-                value: process.env.DATABASE_URL,
-                type: 'encrypted',
-                target: ['production', 'preview']
-              }
-            ]
-          });
-
-          fs.mkdirSync('.vercel', { recursive: true });
-          fs.writeFileSync('.vercel/project.json', JSON.stringify({
-            projectId: project.id,
-            orgId: teamId
-          }));
-
-          fs.appendFileSync(process.env.GITHUB_ENV, `VERCEL_PROJECT_ID=${project.id}\n`);
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            `## Vercel provisioning\n\n` +
-            `- Project: **${name}**\n` +
-            `- Project ID: \`${project.id}\`\n` +
-            `- Repository: \`${process.env.GITHUB_REPOSITORY}\`\n`
-          );
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Reusing existing Vercel project: $VERCEL_PROJECT_NAME"
+          elif [ "$HTTP_CODE" = "404" ]; then
+            node --input-type=module > /tmp/vercel-project.json <<'EOF'
+          const body = {
+            name: process.env.VERCEL_PROJECT_NAME,
+            framework: 'nextjs'
+          };
+          process.stdout.write(JSON.stringify(body));
           EOF
+
+            HTTP_CODE=$(curl -sS -o "$PROJECT_RESPONSE" -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data-binary @/tmp/vercel-project.json \
+              "https://api.vercel.com/v11/projects?teamId=$VERCEL_TEAM_ID")
+
+            if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
+              echo "Failed to create Vercel project. HTTP $HTTP_CODE"
+              cat "$PROJECT_RESPONSE"
+              exit 1
+            fi
+            echo "Created Vercel project: $VERCEL_PROJECT_NAME"
+          else
+            echo "Failed to query Vercel project. HTTP $HTTP_CODE"
+            cat "$PROJECT_RESPONSE"
+            exit 1
+          fi
+
+          VERCEL_PROJECT_ID=$(node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(!x.id) process.exit(2); process.stdout.write(x.id)" "$PROJECT_RESPONSE")
+          echo "VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID" >> "$GITHUB_ENV"
+
+          mkdir -p .vercel
+          node -e "const fs=require('fs'); fs.writeFileSync('.vercel/project.json', JSON.stringify({projectId:process.env.VERCEL_PROJECT_ID,orgId:process.env.VERCEL_TEAM_ID}))"
+
+          echo "## Vercel provisioning" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Project: **$VERCEL_PROJECT_NAME**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Project ID: \`$VERCEL_PROJECT_ID\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Repository: \`$GITHUB_REPOSITORY\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure Vercel environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --input-type=module > /tmp/vercel-env.json <<'EOF'
+          const body = [{
+            key: 'DATABASE_URL',
+            value: process.env.DATABASE_URL,
+            type: 'encrypted',
+            target: ['production', 'preview']
+          }];
+          process.stdout.write(JSON.stringify(body));
+          EOF
+
+          HTTP_CODE=$(curl -sS -o /tmp/vercel-env-response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/vercel-env.json \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env?upsert=true&teamId=$VERCEL_TEAM_ID")
+
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
+            echo "Failed to configure Vercel environment. HTTP $HTTP_CODE"
+            cat /tmp/vercel-env-response.json
+            exit 1
+          fi
+
+          echo "DATABASE_URL configured for production and preview."
 
       - name: Pull production configuration
         run: npx vercel pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG"
@@ -113,7 +139,8 @@ jobs:
       - name: Deploy production
         shell: bash
         run: |
-          DEPLOYMENT_URL=$(npx vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG")
+          set -euo pipefail
+          DEPLOYMENT_URL=$(npx vercel deploy --prebuilt --prod --yes --no-color --token="$VERCEL_TOKEN" --scope="$VERCEL_TEAM_SLUG" | tail -n 1)
           echo "DEPLOYMENT_URL=$DEPLOYMENT_URL" >> "$GITHUB_ENV"
           echo "- Production: $DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"
           echo "Deployment URL: $DEPLOYMENT_URL"
@@ -121,15 +148,18 @@ jobs:
       - name: Validate production health
         shell: bash
         run: |
+          set -euo pipefail
           for i in {1..30}; do
             STATUS=$(curl -L -sS -o /tmp/health.json -w "%{http_code}" "$DEPLOYMENT_URL/api/health" || true)
             if [ "$STATUS" = "200" ]; then
               cat /tmp/health.json
               echo "- Health: ✅" >> "$GITHUB_STEP_SUMMARY"
+              echo "Production health check passed."
               exit 0
             fi
             echo "Attempt $i: HTTP $STATUS"
             sleep 10
           done
           echo "Health check failed for $DEPLOYMENT_URL"
+          cat /tmp/health.json 2>/dev/null || true
           exit 1
