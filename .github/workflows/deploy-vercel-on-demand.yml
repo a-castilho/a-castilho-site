@@ -23,6 +23,7 @@ on:
       - 'package-lock.json'
       - 'next.config.*'
       - 'vercel.json'
+      - '.deploy/vercel-retry'
 
 permissions:
   contents: read
@@ -30,6 +31,7 @@ permissions:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.modified, '.deploy/vercel-retry') && !contains(github.event.head_commit.added, '.deploy/vercel-retry'))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -90,6 +92,56 @@ jobs:
           fi
           PROJECT_ID=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/project.json','utf8'));process.stdout.write(x.id)")
           node -e "const fs=require('fs');fs.writeFileSync('.vercel/project.json',JSON.stringify({projectId:process.argv[1],orgId:process.argv[2]}))" "$PROJECT_ID" "$VERCEL_TEAM_ID"
+          npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" -T "$VERCEL_TEAM_ID"
+
+  retry-pending:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [maquinadeleads, telaviva]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve source
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.project }}" in
+            maquinadeleads)
+              REPO="https://github.com/a-castilho/maquinadeleads.git"; ROOT="maquina-de-leads/frontend" ;;
+            telaviva)
+              REPO="https://github.com/acastilho/telaviva.git"; ROOT="preview" ;;
+          esac
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source
+        run: git clone --depth 1 "${{ steps.resolve.outputs.repo }}" /tmp/source
+
+      - name: Deploy and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="${{ matrix.project }}"
+          cd "/tmp/source/${{ steps.resolve.outputs.root }}"
+          mkdir -p .vercel
+          HTTP=$(curl -sS -o /tmp/project.json -w '%{http_code}' \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v9/projects/$PROJECT?teamId=$VERCEL_TEAM_ID")
+          test "$HTTP" = "200"
+          PROJECT_ID=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/project.json','utf8'));process.stdout.write(x.id)")
+          node -e "const fs=require('fs');fs.writeFileSync('.vercel/project.json',JSON.stringify({projectId:process.argv[1],orgId:process.argv[2]}))" "$PROJECT_ID" "$VERCEL_TEAM_ID"
+
           set +e
           OUT=$(npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN" -T "$VERCEL_TEAM_ID" 2>&1)
           RC=$?
@@ -97,9 +149,25 @@ jobs:
           printf '%s\n' "$OUT"
           if [ "$RC" -ne 0 ]; then
             if printf '%s\n' "$OUT" | grep -qi 'rate'; then
-              echo "Vercel build-rate limit still active"
+              DESC="Vercel build-rate limit still active"
+            else
+              DESC="Vercel production deploy failed"
             fi
+            curl -sS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+              -d "$(node -e 'process.stdout.write(JSON.stringify({state:"failure",context:`vercel-retry/${process.argv[1]}`,description:process.argv[2]}))' "$PROJECT" "$DESC")" >/dev/null
             exit "$RC"
           fi
+
           URL=$(printf '%s\n' "$OUT" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)
-          echo "Deployment URL: $URL"
+          test -n "$URL"
+          STATUS=$(curl -L -sS -o /tmp/body -w '%{http_code}' "$URL")
+          test "$STATUS" -ge 200 -a "$STATUS" -lt 400
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d "$(node -e 'process.stdout.write(JSON.stringify({state:"success",context:`vercel-retry/${process.argv[1]}`,description:"Production deploy verified",target_url:process.argv[2]}))' "$PROJECT" "$URL")" >/dev/null
+          echo "$PROJECT=$URL" >> "$GITHUB_STEP_SUMMARY"
