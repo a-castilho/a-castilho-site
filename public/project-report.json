@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "ACS Site",
-  "generated_at": "2026-08-19T17:26:06.221862+00:00",
+  "generated_at": "2026-08-19T17:27:04.583923+00:00",
   "privacy": {
     "mode": "public_sanitized_allowlist",
     "notice": "Esta área pública recebe apenas uma projeção reduzida de documentos permitidos; padrões de credenciais e dados sensíveis são omitidos antes da publicação."
@@ -20,6 +20,13 @@
       "title": "Relatórios do Projeto",
       "source": "docs/PRODUCT_REPORTS.md",
       "content": "# Relatórios do Projeto\n\nPadrão organizacional para apresentar documentação de homologação dentro do produto sem expor dados sensíveis.\n\n[conteúdo sensível omitido]\n\nO relatório deve facilitar revisão, comparação entre planejado e entregue, cópia de contexto para conversas e registro de novas ideias."
+    },
+    {
+      "id": "docs-issues-issue-6",
+      "category": "Issues",
+      "title": "Issue #6 — homologação: validar central de Relatórios na tela",
+      "source": "docs/issues/issue-6.md",
+      "content": "# Issue #6 — homologação: validar central de Relatórios na tela\n\n> Documento gerado automaticamente. Edite a issue; este arquivo será sincronizado.\n\n## Metadados\n\n- **Status:** open\n- **Autor:** @acastilho\n- **Responsáveis:** —\n- **Labels:** —\n- **Atualizada em:** 2026-08-19T17:26:46Z\n- **Fonte:** https://github.com/a-castilho/a-castilho-site/issues/6\n\n## Planejado / descrição\n\n## Objetivo\nValidar no LAB ACS a nova área **Relatórios** e registrar evidência visual da experiência publicada.\n\n## Implementado\n- [x] item Relatórios na navegação de homologação\n- [x] rota `/homologacao/relatorios`\n- [x] leitura por categorias e busca\n- [x] Copiar para conversa\n- [x] atalho Nova ideia\n- [x] projeção pública reduzida por allowlist\n- [x] sanitização reforçada para superfície pública\n\n## Segurança\n[conteúdo sensível omitido]\n\n## Critérios pendentes\n- [ ] abrir a rota em homologação real\n- [ ] registrar screenshot/evidência visual desktop\n- [ ] registrar screenshot/evidência visual mobile\n- [ ] testar busca, categorias e cópia\n- [ ] revisar o status `acs/develop` atualmente falhando\n- [ ] comparar planejado x implementado x tela real\n\nReferência: `docs/ideas/RELATORIOS_HOMOLOGACAO_VALIDACAO.md`.\n\n## Regra de revisão\n\nA PR deve comparar **planejado x implementado x tela/resultado real** e registrar evidência."
     },
     {
       "id": "docs-ideas-RELATORIOS_HOMOLOGACAO_VALIDACAO",
