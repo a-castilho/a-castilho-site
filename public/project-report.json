@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "project": "ACS Site",
+  "generated_at": "2026-08-19T17:28:00Z",
+  "privacy": {"mode":"public_sanitized_allowlist","notice":"Esta área pública recebe apenas uma projeção reduzida de documentos permitidos; padrões de credenciais e dados sensíveis são omitidos antes da publicação."},
+  "documents": [
+    {"id":"governanca","category":"Governança","title":"Rastreabilidade de desenvolvimento","source":"docs/DEVELOPMENT_GOVERNANCE.md","content":"# Rastreabilidade de desenvolvimento\n\nToda entrega deve ser comparável entre intenção, implementação e resultado observável. Mudanças visuais precisam de evidência de revisão."},
+    {"id":"relatorios","category":"Governança","title":"Relatórios do Projeto","source":"docs/PRODUCT_REPORTS.md","content":"# Relatórios do Projeto\n\nA área de homologação usa somente uma projeção pública, reduzida e sanitizada da documentação versionada."},
+    {"id":"ideia-relatorios","category":"Ideias","title":"Central de Relatórios de Homologação","source":"docs/ideas/RELATORIOS_HOMOLOGACAO.md","content":"# Central de Relatórios de Homologação\n\nDisponibilizar leitura simples da documentação, revisão das entregas, cópia de contexto para conversas e registro de novas ideias dentro do laboratório ACS."}
+  ]
+}
