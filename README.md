@@ -1,5 +1,7 @@
 # ACS — Site Institucional
 
+**Atualizado em: 20/08/2026**
+
 Site institucional da ACS, desenvolvido em Next.js com foco em posicionamento comercial como parceira de software, produto e inteligência artificial.
 
 ## Stack
