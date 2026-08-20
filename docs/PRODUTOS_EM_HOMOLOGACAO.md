@@ -39,3 +39,14 @@ O status de homologação deverá ser visualmente claro para evitar que o visita
 ## Escopo desta especificação
 
 Este documento define apenas o requisito funcional da área **Produtos em Homologação**. A implementação técnica será tratada separadamente.
+
+<!-- COMPROMISSO-GERAL-A-CASTILHO -->
+
+---
+
+## Compromisso Geral
+
+**Sempre na melhor prática. No caminho do bem maior.**
+
+**Ir até o fim sem sair do caminho, seja ele qual for.**
+

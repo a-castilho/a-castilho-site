@@ -33,3 +33,14 @@ A API `/api/contact` grava os contatos na tabela `contact_leads`.
 
 ## Deploy
 Configure as variáveis de ambiente no projeto da Vercel antes de publicar em produção.
+
+<!-- COMPROMISSO-GERAL-A-CASTILHO -->
+
+---
+
+## Compromisso Geral
+
+**Sempre na melhor prática. No caminho do bem maior.**
+
+**Ir até o fim sem sair do caminho, seja ele qual for.**
+

@@ -13,3 +13,14 @@
 - [ ] comparação final entre comportamento esperado e tela implantada
 
 Os checks de build, Render e smoke do commit atual incluem resultados verdes, mas `acs/develop` está falhando; a tela não deve ser marcada como visualmente homologada antes de revisão desse status e registro de evidência visual.
+
+<!-- COMPROMISSO-GERAL-A-CASTILHO -->
+
+---
+
+## Compromisso Geral
+
+**Sempre na melhor prática. No caminho do bem maior.**
+
+**Ir até o fim sem sair do caminho, seja ele qual for.**
+
