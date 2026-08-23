@@ -1,0 +1,41 @@
+name: Quick verify external homologation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/quick-verify-external-homolog.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check external homologation URLs
+        shell: bash
+        run: |
+          set -u
+          FAIL=0
+          check() {
+            NAME="$1"; URL="$2"; EXPECT="$3"
+            CODE=$(curl -L -sS -o /tmp/body -w '%{http_code}' --max-time 25 "$URL" || true)
+            OK=0
+            if [ "$CODE" = "200" ]; then
+              if [ -z "$EXPECT" ] || grep -qi "$EXPECT" /tmp/body; then OK=1; fi
+            fi
+            if [ "$OK" = "1" ]; then STATE=success; DESC="$NAME online HTTP 200"; else STATE=failure; DESC="$NAME unavailable HTTP $CODE"; FAIL=1; fi
+            PAYLOAD=$(node -e 'console.log(JSON.stringify({state:process.argv[1],context:process.argv[2],description:process.argv[3],target_url:process.argv[4]}))' "$STATE" "homolog/quick/$NAME" "$DESC" "$URL")
+            curl --fail --silent --show-error -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -d "$PAYLOAD" >/dev/null
+            echo "$DESC"
+          }
+          check devpilot https://devpilot-homolog.onrender.com/health devpilot
+          check regulaai-api https://regulaai-homolog-api.onrender.com/ online
+          check regulaai-web https://regulaai-homolog-web.onrender.com/ RegulaAI
+          exit "$FAIL"
