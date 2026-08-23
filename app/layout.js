@@ -1,6 +1,7 @@
 import './globals.css';
 import './brand.css';
 import './diagnostic.css';
+import AcsLoader from './acs-loader';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://acastilho.com.br';
 
@@ -41,6 +42,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="pt-BR">
       <body>
+        <AcsLoader />
         {children}
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
       </body>
