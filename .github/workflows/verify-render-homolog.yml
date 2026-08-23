@@ -1,0 +1,81 @@
+name: Verify Render homologation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-render-homolog.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for homologation services to become live
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const renderToken=process.env.RENDER_API_KEY;
+          const ghToken=process.env.GH_TOKEN;
+          const repo=process.env.GITHUB_REPOSITORY;
+          const sha=process.env.GITHUB_SHA;
+          if(!renderToken) throw new Error('RENDER_API_KEY missing');
+          const api='https://api.render.com/v1';
+          async function rreq(path){
+            const r=await fetch(api+path,{headers:{Authorization:`Bearer ${renderToken}`,Accept:'application/json'}});
+            const text=await r.text();let data={};try{data=text?JSON.parse(text):{}}catch{data={message:text}}
+            if(!r.ok) throw new Error(`Render ${r.status}: ${data.message||text}`);
+            return data;
+          }
+          async function status(service,state,description,url){
+            const context=`homolog/render/${service.name}`.slice(0,100);
+            const body={state,context,description:String(description).slice(0,140)};
+            if(url) body.target_url=url;
+            const r=await fetch(`https://api.github.com/repos/${repo}/statuses/${sha}`,{method:'POST',headers:{Authorization:`Bearer ${ghToken}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(!r.ok) throw new Error(`GitHub status ${r.status}`);
+          }
+          const listed=await rreq('/services?limit=100');
+          const rows=Array.isArray(listed)?listed:(listed?.data||listed?.services||[]);
+          const services=rows.map(x=>x.service||x).filter(s=>s && (s.name==='acs'||String(s.name||'').includes('homolog')));
+          if(!services.length) throw new Error('No homolog services found');
+          const pending=new Map(services.map(s=>[s.id,s]));
+          for(const s of services){
+            const url=s.serviceDetails?.url||s.url||null;
+            await status(s,'pending','Waiting for latest Render deploy',url);
+          }
+          for(let attempt=1;attempt<=90 && pending.size;attempt++){
+            for(const [id,s] of [...pending]){
+              const deployments=await rreq(`/services/${id}/deploys?limit=1`);
+              const rows=Array.isArray(deployments)?deployments:(deployments?.data||deployments?.deploys||[]);
+              const d=rows[0]?.deploy||rows[0]||{};
+              const state=String(d.status||d.state||'unknown');
+              const url=s.serviceDetails?.url||s.url||null;
+              console.log(`${s.name}: ${state}`);
+              if(state==='live'){
+                await status(s,'success',`Render live: ${d.id||'latest'}`,url);
+                pending.delete(id);
+              } else if(['build_failed','update_failed','canceled','deactivated'].includes(state)){
+                await status(s,'failure',`Render deploy ${state}: ${d.id||'latest'}`,url);
+                pending.delete(id);
+                process.exitCode=1;
+              }
+            }
+            if(pending.size) await new Promise(r=>setTimeout(r,10000));
+          }
+          if(pending.size){
+            for(const s of pending.values()){
+              const url=s.serviceDetails?.url||s.url||null;
+              await status(s,'failure','Render deploy verification timed out',url);
+            }
+            process.exit(1);
+          }
+          NODE
