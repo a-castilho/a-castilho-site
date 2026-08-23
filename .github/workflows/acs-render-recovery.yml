@@ -55,7 +55,7 @@ jobs:
           set -euo pipefail
           npm install --no-save @neondatabase/serverless@^1.0.2 >/dev/null
           node <<'NODE'
-          const {neon}=require('@neondatabase/serverless');
+          import { neon } from '@neondatabase/serverless';
           const sql=neon(process.env.ACS_DATABASE_URL);
           const rows=await sql`select to_regclass('public.contact_leads')::text as table_name, count(*)::int as total_leads from public.contact_leads`;
           if(!rows[0]?.table_name) throw new Error('contact_leads missing');
