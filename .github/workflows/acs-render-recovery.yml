@@ -119,4 +119,4 @@ jobs:
           NODE
           node /tmp/render.mjs
 
-# manual deploy trigger: 2026-08-23T00:59:00-03:00
+# manual deploy trigger: 2026-08-23T01:41:00-03:00
