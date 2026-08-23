@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           node <<'NODE'
-          const fs=require('fs');
+          import fs from 'node:fs';
           const token=process.env.RENDER_API_KEY;
           const r=await fetch('https://api.render.com/v1/owners?limit=100',{headers:{Authorization:`Bearer ${token}`,Accept:'application/json'}});
           const text=await r.text();let data={};try{data=text?JSON.parse(text):{}}catch{}
@@ -47,7 +47,12 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT,`id=${first.id}\n`);
           console.log(`workspace=${first.name||first.id}`);
           NODE
-          render workspace set "${{ steps.workspace.outputs.id }}" --output text || true
+
+      - name: Select workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          render workspace set "${{ steps.workspace.outputs.id }}" --output text
 
       - name: Create DevPilot homologation if missing
         shell: bash
@@ -82,7 +87,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          render workspace set "${{ steps.workspace.outputs.id }}" --output text || true
           if render pg list --output json | jq -e '.[] | select(.name=="regulaai-homolog-db")' >/dev/null; then
             echo 'regulaai-homolog-db already exists'
           else
@@ -94,7 +98,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          render workspace set "${{ steps.workspace.outputs.id }}" --output text || true
           JSON=$(render pg get regulaai-homolog-db --include-sensitive-connection-info --output json)
           printf '%s\n' "$JSON" > /tmp/regulaai-db.json
           URL=$(printf '%s' "$JSON" | jq -r '.. | .internalConnectionString? // .internalURL? // .internalUrl? // .connectionString? // empty' | head -n1)
