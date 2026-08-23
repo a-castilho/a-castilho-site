@@ -1,0 +1,126 @@
+name: Provision missing Render homologation v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/provision-missing-render-homolog-v2.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      RENDER_CLI_VERSION: v2.22.0
+    steps:
+      - name: Install CLI and select workspace
+        id: workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${RENDER_CLI_VERSION#v}"
+          curl -sSfL "https://github.com/render-oss/cli/releases/download/${RENDER_CLI_VERSION}/cli_${v}_linux_amd64.zip" -o /tmp/render.zip
+          unzip -q /tmp/render.zip -d /tmp/render
+          sudo find /tmp/render -type f -name 'cli*' -perm -u+x -exec cp {} /usr/local/bin/render \;
+          OWNER=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H 'Accept: application/json' 'https://api.render.com/v1/owners?limit=100' | jq -r '.[0].owner.id // .[0].id')
+          test -n "$OWNER" -a "$OWNER" != null
+          echo "id=$OWNER" >> "$GITHUB_OUTPUT"
+          render workspace set "$OWNER" --output text
+
+      - name: Provision DevPilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXISTS=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H 'Accept: application/json' 'https://api.render.com/v1/services?limit=100' | jq -r '[.[] | (.service // .) | .name] | index("devpilot-homolog") != null')
+          if [ "$EXISTS" = true ]; then echo 'devpilot-homolog already exists'; exit 0; fi
+          render services create --confirm --output json \
+            --type web_service --name devpilot-homolog \
+            --repo https://github.com/a-castilho/devpilot --branch main \
+            --runtime docker --plan free --health-check-path /health --auto-deploy \
+            --env-var DEVPILOT_ENV=homologation \
+            --env-var DEVPILOT_DATA_DIR=/tmp/devpilot \
+            --env-var DEVPILOT_REPOSITORIES_DIR=/tmp/devpilot/repositories \
+            --env-var DEVPILOT_HOST_ACTIONS_DIR=/tmp/devpilot/host-actions \
+            --env-var DEVPILOT_EXECUTION_ENABLED=false \
+            --env-var DEVPILOT_EMBEDDED_WORKER=true \
+            --env-var DEVPILOT_ALLOWED_GIT_HOSTS=github.com \
+            --env-var DEVPILOT_BOOTSTRAP_TOKEN="$(openssl rand -hex 24)" \
+            --env-var DEVPILOT_AUTH_SECRET="$(openssl rand -hex 32)" \
+            --env-var DEVPILOT_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d '\n')"
+
+      - name: Provision RegulaAI database
+        shell: bash
+        run: |
+          set -euo pipefail
+          if render pg list --output json | jq -e '.. | objects | select(.name?=="regulaai-homolog-db")' >/dev/null; then
+            echo 'regulaai-homolog-db already exists'
+          else
+            render pg create --confirm --output json --workspace "${{ steps.workspace.outputs.id }}" \
+              --name regulaai-homolog-db --database-name regulaai --database-user regulaai --plan free --version 16
+          fi
+
+      - name: Resolve RegulaAI database URL
+        id: db
+        shell: bash
+        run: |
+          set -euo pipefail
+          JSON=$(render pg get regulaai-homolog-db --include-sensitive-connection-info --output json)
+          URL=$(printf '%s' "$JSON" | jq -r '.. | objects | .internalConnectionString? // .internalURL? // .internalUrl? // .connectionString? // .internal_connection_string? // empty' | head -n1)
+          test -n "$URL" -a "$URL" != null || { printf '%s\n' "$JSON"; exit 1; }
+          echo "::add-mask::$URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Provision RegulaAI API
+        env:
+          DATABASE_URL: ${{ steps.db.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXISTS=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H 'Accept: application/json' 'https://api.render.com/v1/services?limit=100' | jq -r '[.[] | (.service // .) | .name] | index("regulaai-homolog-api") != null')
+          if [ "$EXISTS" = true ]; then echo 'regulaai-homolog-api already exists'; exit 0; fi
+          render services create --confirm --output json \
+            --type web_service --name regulaai-homolog-api \
+            --repo https://github.com/a-castilho/regulaai --branch main --root-directory backend \
+            --runtime docker --plan free --health-check-path / --auto-deploy \
+            --env-var DATABASE_URL="$DATABASE_URL" \
+            --env-var REGULAAI_JWT_SECRET="$(openssl rand -hex 32)" \
+            --env-var REGULAAI_JWT_ALGORITHM=HS256 \
+            --env-var REGULAAI_ACCESS_TOKEN_MINUTES=30 \
+            --env-var REGULAAI_REFRESH_TOKEN_DAYS=14 \
+            --env-var REGULAAI_WHATSAPP_VERIFY_TOKEN="$(openssl rand -hex 24)"
+
+      - name: Provision RegulaAI web
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXISTS=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H 'Accept: application/json' 'https://api.render.com/v1/services?limit=100' | jq -r '[.[] | (.service // .) | .name] | index("regulaai-homolog-web") != null')
+          if [ "$EXISTS" = true ]; then echo 'regulaai-homolog-web already exists'; exit 0; fi
+          render services create --confirm --output json \
+            --type static_site --name regulaai-homolog-web \
+            --repo https://github.com/a-castilho/regulaai --branch main --root-directory frontend \
+            --build-command 'npm install --no-audit --no-fund && npm run build' --publish-directory dist --auto-deploy \
+            --env-var VITE_API_URL=https://regulaai-homolog-api.onrender.com
+
+      - name: Verify all missing services
+        shell: bash
+        run: |
+          set -euo pipefail
+          check(){ n="$1"; u="$2"; q="$3"; for i in $(seq 1 90); do c=$(curl -L -sS -o /tmp/b -w '%{http_code}' --max-time 20 "$u" || true); if [ "$c" = 200 ] && grep -qi "$q" /tmp/b; then echo "$n ready"; return 0; fi; echo "$n attempt=$i http=$c"; sleep 10; done; return 1; }
+          check devpilot https://devpilot-homolog.onrender.com/health devpilot
+          check regulaai-api https://regulaai-homolog-api.onrender.com/ online
+          check regulaai-web https://regulaai-homolog-web.onrender.com/ RegulaAI
+
+      - name: Publish status
+        if: success()
+        shell: bash
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d '{"state":"success","context":"homolog/provision-missing-v2","description":"DevPilot and RegulaAI Render homologation ready"}' >/dev/null
