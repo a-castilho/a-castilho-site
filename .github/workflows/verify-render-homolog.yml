@@ -79,3 +79,5 @@ jobs:
             process.exit(1);
           }
           NODE
+
+# verification trigger: 2026-08-23T01:23:00-03:00
