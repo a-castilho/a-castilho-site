@@ -1,0 +1,58 @@
+name: Deploy RegulaAI Vercel from git
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-regulaai-vercel-from-git.yml'
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      TEAM_ID: team_KrFJ87iJN82qsZ56d8eKsvqJ
+      PROJECT_ID: prj_JzhYNVEjf7DKdTTZRzn9ydANzgMS
+    steps:
+      - name: Create Vercel deployment from RegulaAI main
+        shell: bash
+        run: |
+          set +e
+          RESULT=$(node <<'NODE' 2>&1
+          const token=process.env.VERCEL_TOKEN;
+          if(!token){console.log('ERROR: VERCEL_TOKEN missing');process.exit(1)}
+          const teamId=process.env.TEAM_ID, project=process.env.PROJECT_ID;
+          const body={name:'regulaai',project,target:'production',gitSource:{type:'github',repoId:'1334784738',ref:'main'}};
+          const r=await fetch(`https://api.vercel.com/v13/deployments?teamId=${encodeURIComponent(teamId)}`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
+          const text=await r.text();let data={};try{data=text?JSON.parse(text):{}}catch{data={message:text}}
+          if(!r.ok){console.log(`ERROR: Vercel ${r.status} ${data.error?.message||data.message||text}`);process.exit(1)}
+          console.log(`DEPLOY:${data.id}:${data.url||''}`);
+          if(!data.id)process.exit(1);
+          for(let i=0;i<90;i++){
+            await new Promise(x=>setTimeout(x,5000));
+            const c=await fetch(`https://api.vercel.com/v13/deployments/${data.id}?teamId=${encodeURIComponent(teamId)}`,{headers:{Authorization:`Bearer ${token}`}});
+            const d=await c.json().catch(()=>({}));
+            const state=d.readyState||d.status;
+            if(state==='READY'){console.log(`READY:${d.url||data.url}`);process.exit(0)}
+            if(['ERROR','CANCELED'].includes(state)){console.log(`ERROR: deployment ${state} ${d.errorMessage||d.errorCode||''}`);process.exit(1)}
+          }
+          console.log('ERROR: deployment timeout');process.exit(1);
+          NODE
+          )
+          CODE=$?
+          set -e
+          echo "$RESULT"
+          DESC=$(printf '%s' "$RESULT" | tail -n1 | tr -d '\r' | cut -c1-135)
+          [ -n "$DESC" ] || DESC='Vercel deployment failed without details'
+          if [ "$CODE" -eq 0 ]; then STATE=success; else STATE=failure; fi
+          PAYLOAD=$(node -e 'console.log(JSON.stringify({state:process.argv[1],context:"homolog/regulaai-vercel-retry",description:process.argv[2]}))' "$STATE" "$DESC")
+          curl --fail --silent --show-error -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -d "$PAYLOAD" >/dev/null
+          exit "$CODE"
