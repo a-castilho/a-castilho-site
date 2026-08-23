@@ -45,6 +45,7 @@ export default function RootLayout({ children }) {
         <AcsLoader />
         {children}
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
+        <script defer src="/homolog-theme-picker.js" />
       </body>
     </html>
   );
