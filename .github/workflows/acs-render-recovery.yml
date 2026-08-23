@@ -118,3 +118,5 @@ jobs:
           console.log(`ACS_RENDER_URL=${url}`);
           NODE
           node /tmp/render.mjs
+
+# manual deploy trigger: 2026-08-23T00:39:00-03:00
