@@ -53,7 +53,7 @@ jobs:
             return r.data;
           }
           const specs=[
-            {name:'a-castilho-site'},
+            {name:'a-castilho-site',repo:'https://github.com/a-castilho/a-castilho-site.git'},
             {name:'regulaai'},
             {name:'maquinadeleads',root:'maquina-de-leads/frontend',repo:'https://github.com/a-castilho/maquinadeleads.git'},
             {name:'telaviva',root:'preview',repo:'https://github.com/acastilho/telaviva.git'}
