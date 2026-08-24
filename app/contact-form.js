@@ -96,14 +96,18 @@ export default function ContactForm() {
 
     const form = event.currentTarget;
     const raw = Object.fromEntries(new FormData(form));
+    const projectType = raw.projectType || answers.projectType || 'Outro';
+    const priority = answers.priority || raw.deadline || '';
+
     const diagnostic = [
-      `Tipo de projeto: ${raw.projectType || answers.projectType || 'Não informado'}`,
+      `Tipo de projeto: ${projectType || 'Não informado'}`,
       `Integrações: ${answers.integration || 'Não informado'}`,
       `Plataforma: ${answers.platform || 'Não informado'}`,
       `Estágio: ${answers.maturity || 'Não informado'}`,
-      `Prioridade: ${answers.priority || raw.deadline || 'Não informado'}`,
+      `Prioridade: ${priority || 'Não informado'}`,
       `Telefone: ${raw.phone || 'Não informado'}`,
       `Tamanho da empresa: ${raw.employees || 'Não informado'}`,
+      `Prazo desejado: ${raw.deadline || 'Não informado'}`,
       '',
       `Detalhes adicionais: ${raw.details || 'Não informado'}`
     ].join('\n');
@@ -112,7 +116,15 @@ export default function ContactForm() {
       name: raw.name,
       email: raw.email,
       company: raw.company,
-      projectType: raw.projectType || answers.projectType || 'Outro',
+      phone: raw.phone,
+      projectType,
+      integration: answers.integration || '',
+      platform: answers.platform || '',
+      maturity: answers.maturity || '',
+      priority,
+      employees: raw.employees || '',
+      deadline: raw.deadline || '',
+      details: raw.details || '',
       message: diagnostic,
       website: raw.website
     };
@@ -127,7 +139,9 @@ export default function ContactForm() {
       if (!response.ok) throw new Error(result.error || 'Erro ao enviar');
       form.reset();
       setStatus('success');
-      setMessage('Recebemos seu diagnóstico. A equipe vai analisar o contexto e seguir a conversa.');
+      setMessage(result.leadId
+        ? `Recebemos seu diagnóstico. Protocolo #${result.leadId}. A equipe vai analisar o contexto e seguir a conversa.`
+        : 'Recebemos seu diagnóstico. A equipe vai analisar o contexto e seguir a conversa.');
     } catch (error) {
       setStatus('error');
       setMessage(error.message || 'Não foi possível enviar agora.');
