@@ -77,7 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > /tmp/neon.mjs <<'NODE'
+          cat > .acs-neon.mjs <<'NODE'
           import fs from 'node:fs';
           import { neon } from '@neondatabase/serverless';
           const q=new URLSearchParams({database_name:'neondb',role_name:'neondb_owner',pooled:'true'});
@@ -93,7 +93,8 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_ENV,`ACS_DATABASE_URL=${data.uri}\n`);
           console.log(`Neon verified; preserved rows=${rows[0].total_leads}`);
           NODE
-          node /tmp/neon.mjs
+          node .acs-neon.mjs
+          rm -f .acs-neon.mjs
           node /tmp/status.mjs success acs/neon 'Existing Neon database verified and preserved'
 
       - name: Deploy Vercel once
