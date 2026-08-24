@@ -1,6 +1,7 @@
 import './globals.css';
 import './brand.css';
 import './diagnostic.css';
+import './responsive.css';
 import AcsLoader from './acs-loader';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://acastilho.com.br';
